@@ -1,2 +1,4 @@
 meshtastic
 pypubsub
+openai>=1.0.0
+instructor>=1.0.0

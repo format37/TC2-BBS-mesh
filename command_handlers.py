@@ -9,7 +9,8 @@ from db_operations import (
     add_bulletin, add_mail, delete_mail,
     get_bulletin_content, get_bulletins,
     get_mail, get_mail_content,
-    add_channel, get_channels, get_sender_id_by_mail_id
+    add_channel, get_channels, get_sender_id_by_mail_id,
+    add_conversation_message, get_conversation_history, clear_conversation_history
 )
 from utils import (
     get_node_id_from_num, get_node_info,
@@ -52,6 +53,8 @@ def build_menu(items, menu_name):
             menu_str += "[F]ortune\n"
         elif item.strip() == 'W':
             menu_str += "[W]all of Shame\n"
+        elif item.strip() == 'A':
+            menu_str += "[A]I Chat\n"
     return menu_str
 
 def handle_help_command(sender_id, interface, menu_name=None):
@@ -665,3 +668,101 @@ def handle_quick_help_command(sender_id, interface):
     response = ("✈️QUICK COMMANDS✈️\nSend command below for usage info:\nSM,, - Send "
                 "Mail\nCM - Check Mail\nPB,, - Post Bulletin\nCB,, - Check Bulletins\n")
     send_message(response, sender_id, interface)
+
+
+# AI Chat handlers
+
+# Global chat handler instance (initialized on first use)
+_chat_handler = None
+
+
+def _get_chat_handler():
+    """Get or initialize the chat handler."""
+    global _chat_handler
+    if _chat_handler is None:
+        try:
+            # Read LLM config
+            llm_config = configparser.ConfigParser()
+            llm_config.read('config.ini')
+
+            if 'llm' not in llm_config:
+                logging.warning("LLM configuration not found in config.ini")
+                return None
+
+            api_key = llm_config['llm'].get('api_key', '')
+            model = llm_config['llm'].get('model', 'gpt-4o-mini')
+
+            if not api_key:
+                logging.warning("LLM API key not configured")
+                return None
+
+            from llm_chat import ChatHandler
+            _chat_handler = ChatHandler(api_key, model)
+            logging.info(f"LLM Chat initialized with model: {model}")
+
+        except Exception as e:
+            logging.error(f"Failed to initialize LLM Chat: {e}")
+            return None
+
+    return _chat_handler
+
+
+def handle_ai_command(sender_id, interface):
+    """Handle the initial AI Chat menu selection."""
+    chat_handler = _get_chat_handler()
+
+    if chat_handler is None:
+        send_message("AI Chat not available. Check config.", sender_id, interface)
+        update_user_state(sender_id, None)
+        return
+
+    response = "🤖AI Chat🤖\nSend message.\ne[X]it, [R]eset, [H]elp"
+    send_message(response, sender_id, interface)
+    update_user_state(sender_id, {'command': 'AI_CHAT', 'step': 1})
+
+
+def handle_ai_steps(sender_id, message, step, state, interface):
+    """Handle AI chat conversation steps."""
+    message = message.strip()
+    message_lower = message.lower()
+
+    # Handle single-letter commands
+    if message_lower == 'x':
+        send_message("Exiting AI Chat.", sender_id, interface)
+        handle_help_command(sender_id, interface)
+        return
+
+    if message_lower == 'h':
+        handle_ai_command(sender_id, interface)
+        return
+
+    if message_lower == 'r':
+        clear_conversation_history(str(sender_id))
+        send_message("Conversation cleared.", sender_id, interface)
+        handle_ai_command(sender_id, interface)
+        return
+
+    chat_handler = _get_chat_handler()
+
+    if chat_handler is None:
+        send_message("AI Chat error. Try later.", sender_id, interface)
+        update_user_state(sender_id, None)
+        return
+
+    try:
+        # Process the message using the chat handler
+        response = chat_handler.process_message(
+            sender_id=str(sender_id),
+            message=message,
+            get_history_func=get_conversation_history,
+            add_message_func=add_conversation_message,
+            clear_history_func=clear_conversation_history
+        )
+
+        send_message(response, sender_id, interface)
+        update_user_state(sender_id, {'command': 'AI_CHAT', 'step': 1})
+
+    except Exception as e:
+        logging.error(f"AI Chat error for {sender_id}: {e}")
+        send_message("Error. Try again.", sender_id, interface)
+        update_user_state(sender_id, {'command': 'AI_CHAT', 'step': 1})

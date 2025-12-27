@@ -48,6 +48,14 @@ def initialize_database():
                     name TEXT NOT NULL,
                     url TEXT NOT NULL
                 );''')
+    c.execute('''CREATE TABLE IF NOT EXISTS ai_conversations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    language TEXT,
+                    timestamp TEXT NOT NULL
+                );''')
     conn.commit()
     print("Database schema initialized.")
 
@@ -164,3 +172,43 @@ def get_sender_id_by_mail_id(mail_id):
     if result:
         return result[0]
     return None
+
+
+# AI Conversation functions
+
+def add_conversation_message(sender_id, role, content, language=None):
+    """Add a message to the AI conversation history."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    c.execute(
+        "INSERT INTO ai_conversations (sender_id, role, content, language, timestamp) VALUES (?, ?, ?, ?, ?)",
+        (str(sender_id), role, content, language, timestamp)
+    )
+    conn.commit()
+
+
+def get_conversation_history(sender_id, limit=10):
+    """
+    Get conversation history for a sender.
+
+    Returns list of dicts: [{"role": "user/assistant", "content": "..."}]
+    """
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT role, content FROM ai_conversations WHERE sender_id = ? ORDER BY id DESC LIMIT ?",
+        (str(sender_id), limit)
+    )
+    rows = c.fetchall()
+    # Reverse to get chronological order
+    return [{"role": row[0], "content": row[1]} for row in reversed(rows)]
+
+
+def clear_conversation_history(sender_id):
+    """Clear all conversation history for a sender."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM ai_conversations WHERE sender_id = ?", (str(sender_id),))
+    conn.commit()
+    logging.info(f"Cleared AI conversation history for {sender_id}")
