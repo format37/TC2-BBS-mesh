@@ -9,7 +9,7 @@ from db_operations import (
     add_bulletin, add_mail, delete_mail, delete_bulletin,
     get_bulletin_content, get_bulletins,
     get_mail, get_mail_content,
-    add_channel, get_channels, get_sender_id_by_mail_id,
+    add_channel, get_channels, delete_channel, get_sender_id_by_mail_id,
     add_conversation_message, get_conversation_history, clear_conversation_history
 )
 from utils import (
@@ -408,7 +408,7 @@ def handle_wall_of_shame_command(sender_id, interface):
 
 
 def handle_channel_directory_command(sender_id, interface):
-    response = "📚CHANNEL DIRECTORY📚\nWhat would you like to do?\n[V]iew  [P]ost  E[X]IT"
+    response = "📚CHANNEL DIRECTORY📚\nWhat would you like to do?\n[V]iew [P]ost [D]elete E[X]IT"
     send_message(response, sender_id, interface)
     update_user_state(sender_id, {'command': 'CHANNEL_DIRECTORY', 'step': 1})
 
@@ -427,7 +427,7 @@ def handle_channel_directory_steps(sender_id, message, step, state, interface):
             channels = get_channels()
             if channels:
                 response = "Select a channel number to view:\n" + "\n".join(
-                    [f"[{i}] {channel[0]}" for i, channel in enumerate(channels)])
+                    [f"[{i}] {channel[1]}" for i, channel in enumerate(channels)])
                 send_message(response, sender_id, interface)
                 update_user_state(sender_id, {'command': 'CHANNEL_DIRECTORY', 'step': 2})
             else:
@@ -436,12 +436,28 @@ def handle_channel_directory_steps(sender_id, message, step, state, interface):
         elif choice.lower() == 'p':
             send_message("Name your channel for the directory:", sender_id, interface)
             update_user_state(sender_id, {'command': 'CHANNEL_DIRECTORY', 'step': 3})
+        elif choice.lower() == 'd':
+            # Check if admin
+            node_id = get_node_id_from_num(sender_id, interface)
+            if not admin_node or node_id != admin_node:
+                send_message("Permission denied. Admin only.", sender_id, interface)
+                handle_channel_directory_command(sender_id, interface)
+                return
+            channels = get_channels()
+            if channels:
+                response = "Select channel to delete:\n" + "\n".join(
+                    [f"[{i}] {channel[1]}" for i, channel in enumerate(channels)])
+                send_message(response, sender_id, interface)
+                update_user_state(sender_id, {'command': 'CHANNEL_DIRECTORY', 'step': 5})
+            else:
+                send_message("No channels to delete.", sender_id, interface)
+                handle_channel_directory_command(sender_id, interface)
 
     elif step == 2:
         channel_index = int(message)
         channels = get_channels()
         if 0 <= channel_index < len(channels):
-            channel_name, channel_url = channels[channel_index]
+            channel_id, channel_name, channel_url = channels[channel_index]
             send_message(f"Channel Name: {channel_name}\nChannel URL:\n{channel_url}", sender_id, interface)
         handle_channel_directory_command(sender_id, interface)
 
@@ -455,6 +471,21 @@ def handle_channel_directory_steps(sender_id, message, step, state, interface):
         channel_name = state['channel_name']
         add_channel(channel_name, channel_url)
         send_message(f"Your channel '{channel_name}' has been added to the directory.", sender_id, interface)
+        handle_channel_directory_command(sender_id, interface)
+
+    elif step == 5:
+        # Delete channel (admin only)
+        try:
+            channel_index = int(message)
+            channels = get_channels()
+            if 0 <= channel_index < len(channels):
+                channel_id, channel_name, channel_url = channels[channel_index]
+                delete_channel(channel_id)
+                send_message(f"Channel '{channel_name}' deleted.", sender_id, interface)
+            else:
+                send_message("Invalid channel number.", sender_id, interface)
+        except ValueError:
+            send_message("Invalid channel number.", sender_id, interface)
         handle_channel_directory_command(sender_id, interface)
 
 
@@ -660,7 +691,7 @@ def handle_check_channel_command(sender_id, interface):
 
         response = "Available Channels:\n"
         for i, channel in enumerate(channels):
-            response += f"{i + 1:02d}. Name: {channel[0]}\n"
+            response += f"{i + 1:02d}. Name: {channel[1]}\n"
         response += "\nPlease reply with the number of the channel you want to view."
         send_message(response, sender_id, interface)
 
@@ -680,7 +711,7 @@ def handle_read_channel_command(sender_id, message, state, interface):
             send_message("Invalid channel number. Please try again.", sender_id, interface)
             return
 
-        channel_name, channel_url = channels[message_number]
+        channel_id, channel_name, channel_url = channels[message_number]
         response = f"Channel Name: {channel_name}\nChannel URL: {channel_url}"
         send_message(response, sender_id, interface)
 
@@ -702,7 +733,7 @@ def handle_list_channels_command(sender_id, interface):
 
         response = "Available Channels:\n"
         for i, channel in enumerate(channels):
-            response += f"{i+1:02d}. Name: {channel[0]}\n"
+            response += f"{i+1:02d}. Name: {channel[1]}\n"
         response += "\nPlease reply with the number of the channel you want to view."
         send_message(response, sender_id, interface)
 

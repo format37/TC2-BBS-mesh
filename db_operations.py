@@ -78,8 +78,15 @@ def add_channel(name, url, bbs_nodes=None, interface=None):
 def get_channels():
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT name, url FROM channels")
+    c.execute("SELECT id, name, url FROM channels")
     return c.fetchall()
+
+
+def delete_channel(channel_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+    conn.commit()
 
 
 
