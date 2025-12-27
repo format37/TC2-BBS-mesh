@@ -6,7 +6,7 @@ import time
 from meshtastic import BROADCAST_NUM
 
 from db_operations import (
-    add_bulletin, add_mail, delete_mail,
+    add_bulletin, add_mail, delete_mail, delete_bulletin,
     get_bulletin_content, get_bulletins,
     get_mail, get_mail_content,
     add_channel, get_channels, get_sender_id_by_mail_id,
@@ -25,6 +25,21 @@ config.read('config.ini')
 main_menu_items = config['menu']['main_menu_items'].split(',')
 bbs_menu_items = config['menu']['bbs_menu_items'].split(',')
 utilities_menu_items = config['menu']['utilities_menu_items'].split(',')
+
+# Get admin node for bulletin deletion privileges
+admin_node = config.get('admin', 'admin_node', fallback='').strip()
+
+
+def is_admin_or_owner(sender_id, bulletin_sender_id, interface):
+    """Check if sender can delete a bulletin (is admin or owner)."""
+    node_id = get_node_id_from_num(sender_id, interface)
+    # Admin can delete any bulletin
+    if admin_node and node_id == admin_node:
+        return True
+    # Owner can delete their own bulletin
+    if bulletin_sender_id and node_id == bulletin_sender_id:
+        return True
+    return False
 
 
 def build_menu(items, menu_name):
@@ -172,7 +187,7 @@ def handle_bb_steps(sender_id, message, step, state, interface, bbs_nodes):
             return
         board_name = boards[int(message)]
         bulletins = get_bulletins(board_name)
-        response = f"{board_name} has {len(bulletins)} messages.\n[R]ead  [P]ost"
+        response = f"{board_name} has {len(bulletins)} messages.\n[R]ead  [P]ost  [D]elete"
         send_message(response, sender_id, interface)
         update_user_state(sender_id, {'command': 'BULLETIN_ACTION', 'step': 2, 'board': board_name})
 
@@ -199,10 +214,20 @@ def handle_bb_steps(sender_id, message, step, state, interface, bbs_nodes):
                     return
             send_message("What is the subject of your bulletin? Keep it short.", sender_id, interface)
             update_user_state(sender_id, {'command': 'BULLETIN_POST', 'step': 4, 'board': board_name})
+        elif message.lower() == 'd':
+            bulletins = get_bulletins(board_name)
+            if bulletins:
+                send_message(f"Select bulletin to delete from {board_name}:", sender_id, interface)
+                for bulletin in bulletins:
+                    send_message(f"[{bulletin[0]}] {bulletin[1]}", sender_id, interface)
+                update_user_state(sender_id, {'command': 'BULLETIN_DELETE', 'step': 6, 'board': board_name})
+            else:
+                send_message(f"No bulletins in {board_name}.", sender_id, interface)
+                handle_bb_steps(sender_id, 'e', 1, state, interface, bbs_nodes)
 
     elif step == 3:
         bulletin_id = int(message)
-        sender_short_name, date, subject, content, unique_id = get_bulletin_content(bulletin_id)
+        sender_short_name, date, subject, content, unique_id, bulletin_sender_id = get_bulletin_content(bulletin_id)
         send_message(f"From: {sender_short_name}\nDate: {date}\nSubject: {subject}\n- - - - - - -\n{content}", sender_id, interface)
         board_name = state['board']
         handle_bb_steps(sender_id, 'e', 1, state, interface, bbs_nodes)
@@ -224,13 +249,36 @@ def handle_bb_steps(sender_id, message, step, state, interface, bbs_nodes):
                 update_user_state(sender_id, None)
                 return
             sender_short_name = node_info['user'].get('shortName', f"Node {sender_id}")
-            unique_id = add_bulletin(board, sender_short_name, subject, content, bbs_nodes, interface)
+            unique_id = add_bulletin(board, sender_short_name, subject, content, bbs_nodes, interface, sender_id=node_id)
             send_message(f"Your bulletin '{subject}' has been posted to {board}.\n(╯°□°)╯📄📌[{board}]", sender_id, interface)
             handle_bb_steps(sender_id, 'e', 1, state, interface, bbs_nodes)
         else:
             state['content'] += message + "\n"
             update_user_state(sender_id, state)
 
+    elif step == 6:
+        # Delete bulletin step
+        try:
+            bulletin_id = int(message)
+            bulletin_data = get_bulletin_content(bulletin_id)
+            if bulletin_data is None:
+                send_message("Bulletin not found.", sender_id, interface)
+                handle_bb_steps(sender_id, 'e', 1, state, interface, bbs_nodes)
+                return
+
+            sender_short_name, date, subject, content, unique_id, bulletin_sender_id = bulletin_data
+
+            # Check permission: admin or owner
+            if is_admin_or_owner(sender_id, bulletin_sender_id, interface):
+                delete_bulletin(bulletin_id, bbs_nodes if bbs_nodes else [], interface)
+                send_message(f"Bulletin '{subject}' deleted.", sender_id, interface)
+            else:
+                send_message("Permission denied. You can only delete your own bulletins.", sender_id, interface)
+
+            handle_bb_steps(sender_id, 'e', 1, state, interface, bbs_nodes)
+        except ValueError:
+            send_message("Invalid bulletin number.", sender_id, interface)
+            handle_bb_steps(sender_id, 'e', 1, state, interface, bbs_nodes)
 
 
 def handle_mail_steps(sender_id, message, step, state, interface, bbs_nodes):
@@ -522,9 +570,10 @@ def handle_post_bulletin_command(sender_id, message, interface, bbs_nodes):
             return
 
         _, board_name, subject, content = parts
-        sender_short_name = get_node_short_name(get_node_id_from_num(sender_id, interface), interface)
+        node_id = get_node_id_from_num(sender_id, interface)
+        sender_short_name = get_node_short_name(node_id, interface)
 
-        unique_id = add_bulletin(board_name, sender_short_name, subject, content, bbs_nodes, interface)
+        unique_id = add_bulletin(board_name, sender_short_name, subject, content, bbs_nodes, interface, sender_id=node_id)
         send_message(f"Your bulletin '{subject}' has been posted to {board_name}.", sender_id, interface)
 
 

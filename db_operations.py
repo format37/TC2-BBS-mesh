@@ -28,11 +28,17 @@ def initialize_database():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     board TEXT NOT NULL,
                     sender_short_name TEXT NOT NULL,
+                    sender_id TEXT,
                     date TEXT NOT NULL,
                     subject TEXT NOT NULL,
                     content TEXT NOT NULL,
                     unique_id TEXT NOT NULL
                 )''')
+    # Migration: add sender_id column if missing (for existing databases)
+    c.execute("PRAGMA table_info(bulletins)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'sender_id' not in columns:
+        c.execute("ALTER TABLE bulletins ADD COLUMN sender_id TEXT")
     c.execute('''CREATE TABLE IF NOT EXISTS mail (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     sender TEXT NOT NULL,
@@ -77,15 +83,15 @@ def get_channels():
 
 
 
-def add_bulletin(board, sender_short_name, subject, content, bbs_nodes, interface, unique_id=None):
+def add_bulletin(board, sender_short_name, subject, content, bbs_nodes, interface, unique_id=None, sender_id=None):
     conn = get_db_connection()
     c = conn.cursor()
     date = datetime.now().strftime('%Y-%m-%d %H:%M')
     if not unique_id:
         unique_id = str(uuid.uuid4())
     c.execute(
-        "INSERT INTO bulletins (board, sender_short_name, date, subject, content, unique_id) VALUES (?, ?, ?, ?, ?, ?)",
-        (board, sender_short_name, date, subject, content, unique_id))
+        "INSERT INTO bulletins (board, sender_short_name, sender_id, date, subject, content, unique_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (board, sender_short_name, sender_id, date, subject, content, unique_id))
     conn.commit()
     if bbs_nodes and interface:
         send_bulletin_to_bbs_nodes(board, sender_short_name, subject, content, unique_id, bbs_nodes, interface)
@@ -107,7 +113,7 @@ def get_bulletins(board):
 def get_bulletin_content(bulletin_id):
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("SELECT sender_short_name, date, subject, content, unique_id FROM bulletins WHERE id = ?", (bulletin_id,))
+    c.execute("SELECT sender_short_name, date, subject, content, unique_id, sender_id FROM bulletins WHERE id = ?", (bulletin_id,))
     return c.fetchone()
 
 

@@ -52,6 +52,7 @@ bulletin_menu_handlers = {
 board_action_handlers = {
     "r": lambda sender_id, interface, state: handle_bb_steps(sender_id, 'r', 2, state, interface, None),
     "p": lambda sender_id, interface, state: handle_bb_steps(sender_id, 'p', 2, state, interface, None),
+    "d": lambda sender_id, interface, state: handle_bb_steps(sender_id, 'd', 2, state, interface, None),
     "x": handle_help_command
 }
 
@@ -168,6 +169,8 @@ def process_message(sender_id, message, interface, is_sync_message=False):
                     handle_bb_steps(sender_id, message, 5, state, interface, bbs_nodes)
                 elif command == 'BULLETIN_READ':
                     handle_bb_steps(sender_id, message, 3, state, interface, bbs_nodes)
+                elif command == 'BULLETIN_DELETE':
+                    handle_bb_steps(sender_id, message, 6, state, interface, bbs_nodes)
                 elif command == 'JS8CALL_MENU':
                     handle_js8call_steps(sender_id, message, step, interface, state)
                 elif command == 'GROUP_MESSAGES':
