@@ -1,0 +1,11 @@
+services:
+  tc2-bbs-mesh:
+    build: .
+    restart: always
+    volumes:
+      - ./data:/home/mesh/bbs/config
+    devices:
+      - /dev/ttyACM1:/dev/ttyACM1
+    group_add:
+      - "20"  # dialout group for serial port access
+    container_name: tc2-bbs-mesh
