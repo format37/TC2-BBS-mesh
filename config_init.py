@@ -120,6 +120,8 @@ def initialize_config(config_file: str = None) -> dict[str, Any]:
 
     print(f"Nodes with Urgent board permissions: {allowed_nodes}")
 
+    restart_delay = config.getint('connection', 'restart_delay', fallback=30)
+
     return {
         'config': config,
         'interface_type': interface_type,
@@ -127,7 +129,8 @@ def initialize_config(config_file: str = None) -> dict[str, Any]:
         'port': port,
         'bbs_nodes': bbs_nodes,
         'allowed_nodes': allowed_nodes,
-        'mqtt_topic': 'meshtastic.receive'
+        'mqtt_topic': 'meshtastic.receive',
+        'restart_delay': restart_delay
     }
 
 

@@ -13,6 +13,7 @@ other BBS servers listed in the config.ini file.
 """
 
 import logging
+import sys
 import time
 
 from config_init import initialize_config, get_interface, init_cli_parser, merge_config
@@ -36,6 +37,24 @@ js8call_handler.setLevel(logging.DEBUG)
 js8call_formatter = logging.Formatter('%(asctime)s - JS8Call - %(levelname)s - %(message)s', '%Y-%m-%d %H:%M:%S')
 js8call_handler.setFormatter(js8call_formatter)
 js8call_logger.addHandler(js8call_handler)
+
+def check_interface_health(interface):
+    """Check if the meshtastic interface is still connected."""
+    # Check if stream is still available
+    if getattr(interface, 'stream', None) is None:
+        return False
+
+    # Check if stream is open (for serial)
+    if hasattr(interface.stream, 'is_open') and not interface.stream.is_open:
+        return False
+
+    # Check reader thread
+    rx_thread = getattr(interface, '_rxThread', None)
+    if rx_thread and not rx_thread.is_alive():
+        return False
+
+    return True
+
 
 def display_banner():
     banner = """
@@ -79,9 +98,20 @@ def main():
     if js8call_client.db_conn:
         js8call_client.connect()
 
+    restart_delay = system_config.get('restart_delay', 30)
+
     try:
         while True:
             time.sleep(1)
+
+            if not check_interface_health(interface):
+                logging.error("Serial connection lost. Exiting for container restart...")
+                logging.info(f"Waiting {restart_delay} seconds before exit...")
+                time.sleep(restart_delay)
+                interface.close()
+                if js8call_client.connected:
+                    js8call_client.close()
+                sys.exit(1)
 
     except KeyboardInterrupt:
         logging.info("Shutting down the server...")
