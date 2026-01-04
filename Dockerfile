@@ -3,6 +3,9 @@ FROM python:3.11-alpine
 # Unbuffered Python output for Docker logs
 ENV PYTHONUNBUFFERED=1
 
+# Install timezone data (required for TZ environment variable on Alpine)
+RUN apk add --no-cache tzdata
+
 # Switch to non-root user
 RUN adduser --disabled-password mesh
 USER mesh

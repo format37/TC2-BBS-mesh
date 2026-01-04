@@ -2,6 +2,8 @@ services:
   tc2-bbs-mesh:
     build: .
     restart: always
+    environment:
+      - TZ=Asia/Tbilisi
     volumes:
       - ./data:/home/mesh/bbs/config
     devices:
