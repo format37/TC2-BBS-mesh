@@ -62,6 +62,13 @@ def initialize_database():
                     language TEXT,
                     timestamp TEXT NOT NULL
                 );''')
+    c.execute('''CREATE TABLE IF NOT EXISTS user_activity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    node_id TEXT NOT NULL UNIQUE,
+                    short_name TEXT,
+                    long_name TEXT,
+                    last_activity TEXT NOT NULL
+                );''')
     conn.commit()
     print("Database schema initialized.")
 
@@ -225,3 +232,37 @@ def clear_conversation_history(sender_id):
     c.execute("DELETE FROM ai_conversations WHERE sender_id = ?", (str(sender_id),))
     conn.commit()
     logging.info(f"Cleared AI conversation history for {sender_id}")
+
+
+# User Activity functions
+
+def record_user_activity(node_id, short_name, long_name):
+    """Record or update user activity timestamp."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+    c.execute(
+        """INSERT INTO user_activity (node_id, short_name, long_name, last_activity)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(node_id) DO UPDATE SET
+               short_name = excluded.short_name,
+               long_name = excluded.long_name,
+               last_activity = excluded.last_activity""",
+        (str(node_id), short_name, long_name, timestamp)
+    )
+    conn.commit()
+
+
+def get_last_users(limit=3):
+    """
+    Get the last N users who interacted with the BBS.
+
+    Returns list of tuples: [(short_name, long_name, last_activity), ...]
+    """
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT short_name, long_name, last_activity FROM user_activity ORDER BY last_activity DESC LIMIT ?",
+        (limit,)
+    )
+    return c.fetchall()

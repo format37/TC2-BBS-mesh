@@ -1,3 +1,4 @@
+import configparser
 import logging
 
 from meshtastic import BROADCAST_NUM
@@ -9,11 +10,55 @@ from command_handlers import (
     handle_read_mail_command, handle_check_mail_command, handle_delete_mail_confirmation, handle_post_bulletin_command,
     handle_check_bulletin_command, handle_read_bulletin_command, handle_read_channel_command,
     handle_post_channel_command, handle_list_channels_command, handle_quick_help_command,
-    handle_ai_command, handle_ai_steps
+    handle_ai_command, handle_ai_steps, handle_last_users_command
 )
-from db_operations import add_bulletin, add_mail, delete_bulletin, delete_mail, get_db_connection, add_channel
+from db_operations import add_bulletin, add_mail, delete_bulletin, delete_mail, get_db_connection, add_channel, record_user_activity
 from js8call_integration import handle_js8call_command, handle_js8call_steps, handle_group_message_selection
 from utils import get_user_state, get_node_short_name, get_node_id_from_num, send_message
+
+
+# Load quick commands configuration
+config = configparser.ConfigParser()
+config.read('config.ini')
+
+# Default quick commands (used if config section is missing)
+DEFAULT_QUICK_COMMANDS = {
+    'send_mail': {'prefix': 'sm,,', 'enabled': True, 'has_args': True},
+    'check_mail': {'prefix': 'cm', 'enabled': True, 'has_args': False},
+    'post_bulletin': {'prefix': 'pb,,', 'enabled': True, 'has_args': True},
+    'check_bulletin': {'prefix': 'cb,,', 'enabled': True, 'has_args': True},
+    'post_channel': {'prefix': 'chp,,', 'enabled': True, 'has_args': True},
+    'list_channels': {'prefix': 'chl', 'enabled': True, 'has_args': False},
+    'last_users': {'prefix': 'lu', 'enabled': True, 'has_args': False},
+}
+
+quick_commands_config = {}
+if 'quick_commands' in config:
+    for cmd_name, default in DEFAULT_QUICK_COMMANDS.items():
+        if cmd_name in config['quick_commands']:
+            value = config['quick_commands'][cmd_name]
+            prefix, enabled = value.rsplit(',', 1)
+            quick_commands_config[cmd_name] = {
+                'prefix': prefix.lower(),
+                'enabled': enabled.strip().lower() == 'true',
+                'has_args': default['has_args']
+            }
+        else:
+            quick_commands_config[cmd_name] = default
+else:
+    quick_commands_config = DEFAULT_QUICK_COMMANDS
+
+
+def check_quick_command(msg_lower, cmd_name):
+    """Check if message matches a quick command prefix."""
+    cmd = quick_commands_config.get(cmd_name)
+    if cmd and cmd['enabled']:
+        prefix = cmd['prefix']
+        if cmd['has_args']:
+            return msg_lower.startswith(prefix)
+        else:
+            return msg_lower == prefix or msg_lower.startswith(prefix + ' ')
+    return False
 
 main_menu_handlers = {
     "q": handle_quick_help_command,
@@ -36,6 +81,7 @@ utilities_menu_handlers = {
     "s": handle_stats_command,
     "f": handle_fortune_command,
     "w": handle_wall_of_shame_command,
+    "l": handle_last_users_command,
     "x": handle_help_command
 }
 
@@ -93,18 +139,21 @@ def process_message(sender_id, message, interface, is_sync_message=False):
             channel_name, channel_url = parts[1], parts[2]
             add_channel(channel_name, channel_url)
     else:
-        if message_lower.startswith("sm,,"):
+        # Check configurable quick commands
+        if check_quick_command(message_lower, 'send_mail'):
             handle_send_mail_command(sender_id, message_strip, interface, bbs_nodes)
-        elif message_lower.startswith("cm"):
+        elif check_quick_command(message_lower, 'check_mail'):
             handle_check_mail_command(sender_id, interface)
-        elif message_lower.startswith("pb,,"):
+        elif check_quick_command(message_lower, 'post_bulletin'):
             handle_post_bulletin_command(sender_id, message_strip, interface, bbs_nodes)
-        elif message_lower.startswith("cb,,"):
+        elif check_quick_command(message_lower, 'check_bulletin'):
             handle_check_bulletin_command(sender_id, message_strip, interface)
-        elif message_lower.startswith("chp,,"):
+        elif check_quick_command(message_lower, 'post_channel'):
             handle_post_channel_command(sender_id, message_strip, interface)
-        elif message_lower.startswith("chl"):
+        elif check_quick_command(message_lower, 'list_channels'):
             handle_list_channels_command(sender_id, interface)
+        elif check_quick_command(message_lower, 'last_users'):
+            handle_last_users_command(sender_id, interface)
         else:
             if state and state['command'] == 'MENU':
                 menu_name = state['menu']
@@ -207,6 +256,9 @@ def on_receive(packet, interface):
                 else:
                     logging.info("Ignoring non-sync message from known BBS node")
             elif to_id is not None and to_id != 0 and to_id != 255 and to_id == interface.myInfo.my_node_num:
+                # Record user activity for "last users" feature (only for direct messages to BBS)
+                long_name = interface.nodes.get(sender_node_id, {}).get('user', {}).get('longName', '')
+                record_user_activity(sender_node_id, sender_short_name, long_name)
                 process_message(sender_id, message_string, interface, is_sync_message=False)
             else:
                 logging.info("Ignoring message sent to group chat or from unknown node")

@@ -10,7 +10,8 @@ from db_operations import (
     get_bulletin_content, get_bulletins,
     get_mail, get_mail_content,
     add_channel, get_channels, delete_channel, get_sender_id_by_mail_id,
-    add_conversation_message, get_conversation_history, clear_conversation_history
+    add_conversation_message, get_conversation_history, clear_conversation_history,
+    get_last_users
 )
 from utils import (
     get_node_id_from_num, get_node_info,
@@ -70,6 +71,8 @@ def build_menu(items, menu_name):
             menu_str += "[W]all of Shame\n"
         elif item.strip() == 'A':
             menu_str += "[A]I Chat\n"
+        elif item.strip() == 'L':
+            menu_str += "[L]ast users\n"
     return menu_str
 
 def handle_help_command(sender_id, interface, menu_name=None):
@@ -745,8 +748,49 @@ def handle_list_channels_command(sender_id, interface):
 
 
 def handle_quick_help_command(sender_id, interface):
-    response = ("✈️QUICK COMMANDS✈️\nSend command below for usage info:\nSM,, - Send "
-                "Mail\nCM - Check Mail\nPB,, - Post Bulletin\nCB,, - Check Bulletins\n")
+    # Load quick commands config for dynamic help
+    quick_config = configparser.ConfigParser()
+    quick_config.read('config.ini')
+
+    # Default command info
+    cmd_info = {
+        'send_mail': {'default': 'SM,,', 'desc': 'Send Mail'},
+        'check_mail': {'default': 'CM', 'desc': 'Check Mail'},
+        'post_bulletin': {'default': 'PB,,', 'desc': 'Post Bulletin'},
+        'check_bulletin': {'default': 'CB,,', 'desc': 'Check Bulletins'},
+        'post_channel': {'default': 'CHP,,', 'desc': 'Post Channel'},
+        'list_channels': {'default': 'CHL', 'desc': 'List Channels'},
+        'last_users': {'default': 'LU', 'desc': 'Last Users'},
+    }
+
+    response = "✈️QUICK COMMANDS✈️\n"
+
+    for cmd_name, info in cmd_info.items():
+        prefix = info['default']
+        enabled = True
+
+        if 'quick_commands' in quick_config and cmd_name in quick_config['quick_commands']:
+            value = quick_config['quick_commands'][cmd_name]
+            parts = value.rsplit(',', 1)
+            if len(parts) == 2:
+                prefix = parts[0].upper()
+                enabled = parts[1].strip().lower() == 'true'
+
+        if enabled:
+            response += f"{prefix} - {info['desc']}\n"
+
+    send_message(response, sender_id, interface)
+
+
+def handle_last_users_command(sender_id, interface):
+    """Display the last 3 users who interacted with the BBS."""
+    users = get_last_users(3)
+    if not users:
+        response = "📋Last Users📋\nNo recent users."
+    else:
+        response = "📋Last Users📋\n"
+        for short_name, long_name, last_activity in users:
+            response += f"{short_name} [{long_name}]: {last_activity}\n"
     send_message(response, sender_id, interface)
 
 
