@@ -6,18 +6,16 @@ ENV PYTHONUNBUFFERED=1
 # Install timezone data (required for TZ environment variable)
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
 
-# Switch to non-root user
-RUN adduser --disabled-password mesh
-USER mesh
+# Setup working directory (running as root for serial port access)
 RUN mkdir -p /home/mesh/bbs
 WORKDIR /home/mesh/bbs
 
 # Install Python dependencies
-COPY --chown=mesh:mesh requirements.txt ./
+COPY requirements.txt ./
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy local app code
-COPY --chown=mesh:mesh *.py ./
+COPY *.py ./
 
 # Define config volume
 VOLUME /home/mesh/bbs/config
