@@ -153,11 +153,17 @@ class ChatHandler:
 
         self.logger.info(f"Language: {detected_language.value}, max_tokens: {config.max_tokens}")
 
+        # Short inputs like "2+2" detect as unknown; never tell the model to "respond in unknown"
+        if detected_language == Language.UNKNOWN:
+            language_rule = "Respond in the same language as the user's message"
+        else:
+            language_rule = f"Respond in {detected_language.value}"
+
         # Build system prompt
         system_prompt = f"""You are Groot, a helpful assistant on a Meshtastic mesh network BBS in Tbilisi, Georgia.
 CRITICAL CONSTRAINTS:
 - Your response MUST be under {config.max_tokens} tokens
-- Respond in {detected_language.value}
+- {language_rule}
 - Be extremely concise - Twitter/SMS style
 - No markdown, no bullet points, just plain text
 - User can send R to reset conversation history"""
