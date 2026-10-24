@@ -3,6 +3,8 @@ import re
 import threading
 import time
 
+from meshtastic.protobuf import portnums_pb2
+
 user_states = {}
 # The AI chat worker changes states too; change_user_state keeps its read-modify-write whole.
 _states_lock = threading.Lock()
@@ -10,6 +12,18 @@ _states_lock = threading.Lock()
 # MeshInterface._sendToRadio changes its queue without a lock, and AI chat
 # replies are sent from a worker thread, so sends take turns.
 _send_lock = threading.Lock()
+
+# A message goes to the radio only once the radio has answered the previous
+# one (its ACK, or a NAK), or after ACK_TIMEOUT seconds. Radios on the
+# ESP32-S3's own USB port (Heltec V4, T-Beam S3) can leave their serial input
+# unread for up to 20 s on firmware before 2.8.1, and a second message that
+# arrives meanwhile overflows their 256-byte buffer and is lost
+# (meshtastic/firmware#11864). So ACK_TIMEOUT stays above those 20 s. Waiting
+# for the ACK also keeps the parts of a reply apart on air.
+ACK_TIMEOUT = 30
+_answered = threading.Event()
+_answered.set()
+_handed_at = 0.0
 
 # The radio rejects payloads over DATA_PAYLOAD_LEN (233) bytes.
 MAX_PAYLOAD_BYTES = 200
@@ -106,25 +120,41 @@ def truncate(text, max_bytes, ending='...'):
     return text[:_cut_point(text, limit)].rstrip(' \t\n,.;:-–—') + ending
 
 
+def _on_answer(answered):
+    """The response handler of a message: the radio answered it. Runs on meshtastic's reader thread, so never raises."""
+    def on_response(packet):
+        answered.set()
+        decoded = packet.get('decoded') or {}
+        reason = (decoded.get('routing') or {}).get('errorReason', 'NONE')
+        if reason != 'NONE':
+            logging.info(f"sendID {decoded.get('requestId')} was not delivered: {reason}")
+    return on_response
+
+
 def send_message(message, destination, interface, numbered=False, max_bytes=MAX_PAYLOAD_BYTES):
+    global _answered, _handed_at
     for chunk in split_message(message, max_bytes, numbered):
         try:
             with _send_lock:
-                d = interface.sendText(
-                    text=chunk,
+                wait = _handed_at + ACK_TIMEOUT - time.monotonic()
+                if wait > 0 and not _answered.wait(wait):
+                    logging.info(f"No ACK in {ACK_TIMEOUT} s, sending the next message anyway")
+                answered = threading.Event()
+                d = interface.sendData(
+                    chunk.encode('utf-8'),
                     destinationId=destination,
+                    portNum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
                     wantAck=True,
-                    wantResponse=False
+                    onResponse=_on_answer(answered),
+                    onResponseAckPermitted=True,
                 )
+                _answered, _handed_at = answered, time.monotonic()
             destid = get_node_id_from_num(destination, interface)
             size = len(chunk.encode('utf-8'))
             chunk = chunk.replace('\n', '\\n')
             logging.info(f"Sending message to user '{get_node_short_name(destid, interface)}' ({destid}) with sendID {d.id} ({size} bytes): \"{chunk}\"")
         except Exception as e:
             logging.info(f"REPLY SEND ERROR {e}")
-
-        
-        time.sleep(2)
 
 
 def get_node_info(interface, short_name):

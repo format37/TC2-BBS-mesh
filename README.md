@@ -240,6 +240,8 @@ The following device roles have been working:
 - **Client**
 - **Router_Client**
 
+The BBS hands the radio one message at a time: each message waits until the radio has answered the previous one (its ACK, or a NAK), for at most 30 seconds. Radios on the ESP32-S3's own USB port (Heltec V4, LILYGO T-Beam S3, and others that show up as an Espressif USB JTAG/serial device) lose a message that reaches them over USB while they are still reading the previous one, on firmware before 2.8.1 ([meshtastic/firmware#11864](https://github.com/meshtastic/firmware/issues/11864)). With such a radio, each message of a longer reply can take up to about 20 seconds to go out.
+
 ## Features
 
 - **Mail System**: Send and receive mail messages.

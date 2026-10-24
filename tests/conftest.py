@@ -14,6 +14,7 @@ import tempfile
 from types import SimpleNamespace
 
 import pytest
+from meshtastic.protobuf import portnums_pb2
 from openai.types.chat import ChatCompletion
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -66,6 +67,8 @@ class FakeInterface:
         self.allowed_nodes = []
         self.sent = []          # (destination, text), in order
         self.oversize = []      # payloads the radio would reject
+        self.acks = True        # ACK every message at once; else answer() them later
+        self.unanswered = []    # (packet id, response handler), while acks is False
 
     def add_node(self, num, short_name, long_name=None, last_heard=None, battery=None):
         node_id = f'!{num:08x}'
@@ -79,11 +82,26 @@ class FakeInterface:
         self.nodes[node_id] = node
         return num
 
-    def sendText(self, text, destinationId, wantAck=False, wantResponse=False):
-        if len(text.encode('utf-8')) > 200:
+    def sendData(self, data, destinationId, portNum=None, wantAck=False, onResponse=None,
+                 onResponseAckPermitted=False):
+        # Else the radio sends PRIVATE_APP, which no app shows
+        assert portNum == portnums_pb2.PortNum.TEXT_MESSAGE_APP
+        text = data.decode('utf-8')
+        if len(data) > 200:
             self.oversize.append(text)
         self.sent.append((destinationId, text))
-        return SimpleNamespace(id=len(self.sent))
+        packet = SimpleNamespace(id=len(self.sent))
+        if onResponse is not None:
+            self.unanswered.append((packet.id, onResponse))
+            if self.acks:
+                self.answer()
+        return packet
+
+    def answer(self, reason='NONE'):
+        """The oldest unanswered message gets its ACK, or a NAK for reason."""
+        packet_id, on_response = self.unanswered.pop(0)
+        on_response({'from': BBS_NUM, 'decoded': {'portnum': 'ROUTING_APP', 'requestId': packet_id,
+                                                  'routing': {'errorReason': reason}}})
 
     def texts(self, destination):
         return [text for dest, text in self.sent if dest == destination]
@@ -98,14 +116,14 @@ def _close_db():
 
 @pytest.fixture(autouse=True)
 def bbs_dir(tmp_path, monkeypatch):
-    """A fresh working directory, config.ini and database; sends don't sleep."""
+    """A fresh working directory, config.ini and database; no message left waiting for its ACK."""
     import db_operations
     import utils
     monkeypatch.chdir(tmp_path)
     write_config(tmp_path)
     _close_db()
     db_operations.initialize_database()
-    monkeypatch.setattr(utils, 'time', SimpleNamespace(sleep=lambda seconds: None))
+    monkeypatch.setattr(utils, '_handed_at', 0.0)
     utils.user_states.clear()
     yield tmp_path
     _close_db()
