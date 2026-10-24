@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+import utils
 from conftest import FakeInterface
 from utils import send_bulletin_to_bbs_nodes, send_message, split_message
 
@@ -77,14 +78,15 @@ def test_send_message_sends_every_part_within_the_limit(iface):
 
 def test_a_send_error_is_logged_and_the_rest_still_goes_out(iface, caplog):
     calls = []
+    original = iface.sendData
 
-    def failing_send(text, destinationId, wantAck=False, wantResponse=False):
-        calls.append(text)
+    def failing_send(data, destinationId, **kwargs):
+        calls.append(data)
         if len(calls) == 1:
             raise RuntimeError('Data payload too big')
-        return type('Packet', (), {'id': len(calls)})()
+        return original(data, destinationId, **kwargs)
 
-    iface.sendText = failing_send
+    iface.sendData = failing_send
     with caplog.at_level(logging.INFO):
         send_message('word ' * 100, 42, iface)
     assert len(calls) == 3
@@ -94,17 +96,17 @@ def test_a_send_error_is_logged_and_the_rest_still_goes_out(iface, caplog):
 def test_sends_from_two_threads_take_turns(iface):
     inside = []
     overlaps = []
-    original = iface.sendText
+    original = iface.sendData
 
-    def slow_send(**kwargs):
+    def slow_send(data, destinationId, **kwargs):
         if inside:
-            overlaps.append(kwargs['text'])
+            overlaps.append(data)
         inside.append(1)
         time.sleep(0.002)
         inside.pop()
-        return original(**kwargs)
+        return original(data, destinationId, **kwargs)
 
-    iface.sendText = slow_send
+    iface.sendData = slow_send
     threads = [threading.Thread(target=send_message, args=(f'thread {n} ' * 150, n, iface)) for n in (1, 2)]
     for thread in threads:
         thread.start()
@@ -112,6 +114,65 @@ def test_sends_from_two_threads_take_turns(iface):
         thread.join()
     assert not overlaps
     assert len(iface.texts(1)) == len(iface.texts(2)) > 1
+
+
+def wait_until(condition):
+    deadline = time.monotonic() + 2
+    while not condition():
+        assert time.monotonic() < deadline, 'timed out'
+        time.sleep(0.005)
+
+
+def test_a_part_goes_to_the_radio_once_the_previous_one_is_acked(iface):
+    # A radio still reading the previous part over USB would lose this one
+    iface.acks = False
+    sender = threading.Thread(target=send_message, args=('word ' * 100, 42, iface))
+    sender.start()
+    wait_until(lambda: len(iface.sent) == 1)
+    time.sleep(0.05)
+    assert len(iface.sent) == 1
+    iface.answer()
+    wait_until(lambda: len(iface.sent) == 2)
+    iface.answer()
+    sender.join(2)
+    assert len(iface.sent) == 3
+
+
+def test_a_lone_message_returns_at_once_and_the_next_one_waits(iface):
+    iface.acks = False
+    started = time.monotonic()
+    send_message('Menu', 42, iface)
+    assert time.monotonic() - started < 0.5
+    sender = threading.Thread(target=send_message, args=('Next', 43, iface))
+    sender.start()
+    time.sleep(0.05)
+    assert iface.texts(43) == []
+    iface.answer()
+    sender.join(2)
+    assert iface.texts(43) == ['Next']
+
+
+def test_a_nak_is_logged_and_lets_the_next_part_go(iface, caplog):
+    iface.acks = False
+    sender = threading.Thread(target=send_message, args=('word ' * 60, 42, iface))
+    with caplog.at_level(logging.INFO):
+        sender.start()
+        wait_until(lambda: len(iface.sent) == 1)
+        iface.answer('MAX_RETRANSMIT')
+        sender.join(2)
+    assert len(iface.sent) == 2
+    assert 'sendID 1 was not delivered: MAX_RETRANSMIT' in caplog.text
+
+
+def test_with_no_answer_the_next_part_goes_after_the_timeout(iface, monkeypatch, caplog):
+    monkeypatch.setattr(utils, 'ACK_TIMEOUT', 0.1)
+    iface.acks = False
+    started = time.monotonic()
+    with caplog.at_level(logging.INFO):
+        send_message('word ' * 60, 42, iface)
+    assert len(iface.sent) == 2
+    assert time.monotonic() - started >= 0.1
+    assert 'No ACK in 0.1 s' in caplog.text
 
 
 def test_a_sync_message_to_another_bbs_goes_whole_up_to_the_radios_limit():
