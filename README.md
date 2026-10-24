@@ -15,6 +15,7 @@ If you're a Docker user, TC²-BBS Meshtastic is available on Docker Hub!
 - Python 3.x
 - Meshtastic
 - pypubsub
+- openai and requests (for the AI Chat)
 
 ### Update and Install Git
    
@@ -99,6 +100,25 @@ If you're a Docker user, TC²-BBS Meshtastic is available on Docker Hub!
    bbs_nodes = !f53f4abc,!f3abc123  
    ```
 
+   **[llm]**  
+   Turns on the AI Chat. Enter your OpenAI API key in `api_key`. `max_reply_messages` sets how many radio messages one AI reply may take (default 3). Reasoning models such as gpt-6-sol need `reasoning_effort = none` to call tools; leave it out for models without reasoning, such as gpt-4o-mini.
+
+   **[web_search]**  
+   Lets the AI Chat search the web with Perplexity Pro Search (about $0.0016 a search). Enter your Perplexity API key in `api_key`, or leave it empty to turn web search off.
+
+   ```ini
+   [llm]
+   provider = openai
+   model = gpt-6-sol
+   reasoning_effort = none
+   api_key = sk-proj-your-api-key-here
+   max_reply_messages = 3
+
+   [web_search]
+   provider = perplexity
+   api_key = pplx-your-api-key-here
+   ```
+
 ### Running the Server
 
 Run the server with:
@@ -108,6 +128,15 @@ python server.py
 ```
 
 Be sure you've followed the Python virtual environment steps above and activated it before running.
+
+### Running the Tests
+
+```sh
+pip install pytest
+pytest tests
+```
+
+The tests use a fake radio and a scripted LLM: they never call the real APIs.
 
 ## Command line arguments
 ```
@@ -219,11 +248,30 @@ The following device roles have been working:
 - **Statistics**: View statistics about nodes, hardware, and roles.
 - **Wall of Shame**: View devices with low battery levels.
 - **Fortune Teller**: Get a random fortune. Pulls from the fortunes.txt file. Feel free to edit this file remove or add more if you like.
+- **AI Chat**: Talk to an AI assistant in plain language, in English, Russian or Georgian. See [AI Chat](#ai-chat).
 
 ## Usage
 
 You interact with the BBS by sending direct messages to the node that's connected to the system running the Python script. Sending any message to it will get a response with the main menu.  
 Make selections by sending messages based on the letter or number in brackets - Send M for [M]ail Menu for example.
+
+### AI Chat
+
+Send `A` from the main menu to start the AI Chat. Then write what you need, for example:
+
+- "any new bulletins?" (new since your last check, on all boards)
+- "check my mail", "read #12"
+- "send mail to BOB: meet at 5"
+- "post to News: the repeater is back"
+- "delete bulletin #12"
+- "how is the mesh?", "what channels are there?"
+- "weather in Tbilisi tomorrow" (needs `[web_search]`)
+
+Original mail and bulletin texts are sent to you word for word. Replies take at most `max_reply_messages` messages; a reply split over several messages is numbered `1/3`, `2/3`, ...
+
+Nothing changes until you confirm. Before it sends mail, posts or deletes anything, the BBS asks, for example `Delete bulletin #12 "Party" (General)? Y/N`. Answer `Y` (or `да`, `კი`) to go ahead, `N` to cancel; anything else cancels and is taken as a new message. A confirmation expires after 10 minutes. You can delete only your own mail and bulletins (the admin node can delete any bulletin), and posting to Urgent follows `[allow_list]`.
+
+Send `R` to reset the conversation, `H` for help, `X` to exit.
 
 A video of it in use is available on our YouTube channel:
 

@@ -16,6 +16,7 @@ import logging
 import sys
 import time
 
+from command_handlers import stop_ai_chat
 from config_init import initialize_config, get_interface, init_cli_parser, merge_config
 from db_operations import initialize_database
 from js8call_integration import JS8CallClient
@@ -107,6 +108,7 @@ def main():
             if not check_interface_health(interface):
                 logging.error("Serial connection lost. Exiting for container restart...")
                 logging.info(f"Waiting {restart_delay} seconds before exit...")
+                stop_ai_chat()
                 time.sleep(restart_delay)
                 interface.close()
                 if js8call_client.connected:
@@ -115,6 +117,7 @@ def main():
 
     except KeyboardInterrupt:
         logging.info("Shutting down the server...")
+        stop_ai_chat()
         interface.close()
         if js8call_client.connected:
             js8call_client.close()

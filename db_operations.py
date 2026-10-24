@@ -69,6 +69,11 @@ def initialize_database():
                     long_name TEXT,
                     last_activity TEXT NOT NULL
                 );''')
+    # The last bulletin each node saw as new, for "new since my last check" in AI chat
+    c.execute('''CREATE TABLE IF NOT EXISTS bulletin_seen (
+                    node_id TEXT PRIMARY KEY,
+                    last_bulletin_id INTEGER NOT NULL
+                );''')
     conn.commit()
     print("Database schema initialized.")
 
@@ -129,6 +134,88 @@ def get_bulletin_content(bulletin_id):
     c = conn.cursor()
     c.execute("SELECT sender_short_name, date, subject, content, unique_id, sender_id FROM bulletins WHERE id = ?", (bulletin_id,))
     return c.fetchone()
+
+
+def get_bulletin(bulletin_id):
+    """One bulletin as (board, sender_short_name, sender_id, date, subject, content), or None."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT board, sender_short_name, sender_id, date, subject, content FROM bulletins WHERE id = ?", (bulletin_id,))
+    return c.fetchone()
+
+
+def get_bulletin_id(unique_id):
+    """The local id of the bulletin with this unique_id, or None."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT id FROM bulletins WHERE unique_id = ?", (unique_id,))
+    result = c.fetchone()
+    return result[0] if result else None
+
+
+def get_latest_bulletins(board=None, limit=10):
+    """
+    The newest bulletins, newest first.
+
+    Returns list of tuples: [(id, board, sender_short_name, date, subject), ...];
+    board None means every board
+    """
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, board, sender_short_name, date, subject FROM bulletins "
+        "WHERE ? IS NULL OR board = ? COLLATE NOCASE ORDER BY id DESC LIMIT ?",
+        (board, board, limit)
+    )
+    return c.fetchall()
+
+
+def get_bulletins_after(bulletin_id, board=None, limit=10):
+    """
+    Bulletins with an id above bulletin_id, oldest first.
+
+    Returns list of tuples: [(id, board, sender_short_name, date, subject), ...];
+    board None means every board
+    """
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, board, sender_short_name, date, subject FROM bulletins "
+        "WHERE id > ? AND (? IS NULL OR board = ? COLLATE NOCASE) ORDER BY id LIMIT ?",
+        (bulletin_id, board, board, limit)
+    )
+    return c.fetchall()
+
+
+def count_bulletins(board=None, after_id=0):
+    """How many bulletins have an id above after_id; board None means every board."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "SELECT COUNT(*) FROM bulletins WHERE id > ? AND (? IS NULL OR board = ? COLLATE NOCASE)",
+        (after_id, board, board)
+    )
+    return c.fetchone()[0]
+
+
+def get_bulletin_marker(node_id):
+    """The id of the last bulletin node_id saw as new, or None if it never checked."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT last_bulletin_id FROM bulletin_seen WHERE node_id = ?", (node_id,))
+    result = c.fetchone()
+    return result[0] if result else None
+
+
+def set_bulletin_marker(node_id, bulletin_id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO bulletin_seen (node_id, last_bulletin_id) VALUES (?, ?)
+           ON CONFLICT(node_id) DO UPDATE SET last_bulletin_id = excluded.last_bulletin_id""",
+        (node_id, bulletin_id)
+    )
+    conn.commit()
 
 
 def delete_bulletin(bulletin_id, bbs_nodes, interface):
