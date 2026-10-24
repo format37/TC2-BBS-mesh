@@ -2,8 +2,11 @@ import configparser
 import logging
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from meshtastic import BROADCAST_NUM
+
+from ai_tools import answer_of, text_for
 
 from db_operations import (
     add_bulletin, add_mail, delete_mail, delete_bulletin,
@@ -14,8 +17,8 @@ from db_operations import (
     get_last_users
 )
 from utils import (
-    get_node_id_from_num, get_node_info,
-    get_node_short_name, send_message,
+    change_user_state, get_node_id_from_num, get_node_info,
+    get_node_short_name, get_user_state, send_message,
     update_user_state
 )
 
@@ -605,6 +608,11 @@ def handle_post_bulletin_command(sender_id, message, interface, bbs_nodes):
 
         _, board_name, subject, content = parts
         node_id = get_node_id_from_num(sender_id, interface)
+        if board_name.strip().lower() == 'urgent':
+            allowed_nodes = interface.allowed_nodes
+            if allowed_nodes and node_id not in allowed_nodes:
+                send_message("You don't have permission to post to this board.", sender_id, interface)
+                return
         sender_short_name = get_node_short_name(node_id, interface)
 
         unique_id = add_bulletin(board_name, sender_short_name, subject, content, bbs_nodes, interface, sender_id=node_id)
@@ -655,7 +663,7 @@ def handle_read_bulletin_command(sender_id, message, state, interface):
             return
 
         bulletin_id = bulletins[message_number][0]
-        sender, date, subject, content, unique_id = get_bulletin_content(bulletin_id)
+        sender, date, subject, content, unique_id, bulletin_sender_id = get_bulletin_content(bulletin_id)
         response = f"Date: {date}\nFrom: {sender}\nSubject: {subject}\n\n{content}"
         send_message(response, sender_id, interface)
 
@@ -799,6 +807,13 @@ def handle_last_users_command(sender_id, interface):
 # Global chat handler instance (initialized on first use)
 _chat_handler = None
 
+# An AI turn takes seconds (LLM rounds, a web search). Turns run here, one at
+# a time in the order the messages came, so the meshtastic thread that
+# delivers every packet stays free for the menus meanwhile.
+_ai_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix='ai-chat')
+
+AI_CHAT_MENU = "🤖AI Chat🤖\nSend message. I can do mail, bulletins, mesh status, web search.\ne[X]it, [R]eset, [H]elp"
+
 
 def _get_chat_handler():
     """Get or initialize the chat handler."""
@@ -815,13 +830,15 @@ def _get_chat_handler():
 
             api_key = llm_config['llm'].get('api_key', '')
             model = llm_config['llm'].get('model', 'gpt-4o-mini')
+            max_reply_messages = llm_config['llm'].getint('max_reply_messages', 3)
+            reasoning_effort = llm_config['llm'].get('reasoning_effort', '').strip() or None
 
             if not api_key:
                 logging.warning("LLM API key not configured")
                 return None
 
             from llm_chat import ChatHandler
-            _chat_handler = ChatHandler(api_key, model)
+            _chat_handler = ChatHandler(api_key, model, max_reply_messages, reasoning_effort)
             logging.info(f"LLM Chat initialized with model: {model}")
 
         except Exception as e:
@@ -840,8 +857,7 @@ def handle_ai_command(sender_id, interface):
         update_user_state(sender_id, None)
         return
 
-    response = "🤖AI Chat🤖\nSend message.\ne[X]it, [R]eset, [H]elp"
-    send_message(response, sender_id, interface)
+    send_message(AI_CHAT_MENU, sender_id, interface)
     update_user_state(sender_id, {'command': 'AI_CHAT', 'step': 1})
 
 
@@ -860,33 +876,133 @@ def handle_ai_steps(sender_id, message, step, state, interface):
         handle_ai_command(sender_id, interface)
         return
 
-    if message_lower == 'r':
-        clear_conversation_history(str(sender_id))
-        send_message("Conversation cleared.", sender_id, interface)
-        handle_ai_command(sender_id, interface)
-        return
+    # The first message after a confirmation answers it. The change goes
+    # with that message now, so an X or H sent after it can't drop it.
+    pending = _take_pending(sender_id)
+    # Everything else, R and the answers to confirmations included, waits its turn
+    _ai_worker.submit(_ai_turn, sender_id, message, interface, time.monotonic(), pending)
 
-    chat_handler = _get_chat_handler()
 
-    if chat_handler is None:
-        send_message("AI Chat error. Try later.", sender_id, interface)
-        update_user_state(sender_id, None)
-        return
+def stop_ai_chat():
+    """Drop the AI turns still waiting, so the process can exit after the current one."""
+    _ai_worker.shutdown(wait=False, cancel_futures=True)
 
+
+def _in_ai_chat(state):
+    return bool(state) and state.get('command') == 'AI_CHAT'
+
+
+def _take_pending(sender_id, asked_only=True):
+    """
+    The change waiting for the user's Y, removed from their state.
+
+    Returns None if there is none, or (asked_only) if its confirmation
+    hasn't gone out yet: a message from before can't answer it.
+    """
+    taken = []
+
+    def take(state):
+        pending = state.get('pending') if _in_ai_chat(state) else None
+        if pending is None or (asked_only and pending.asked is None):
+            return state
+        taken.append(pending)
+        return {key: value for key, value in state.items() if key != 'pending'}
+
+    change_user_state(sender_id, take)
+    return taken[0] if taken else None
+
+
+def _store_pending(sender_id, pending):
+    """Keep a change for the user's Y, unless they have left AI chat meanwhile. Returns whether it was kept."""
+    kept = []
+
+    def store(state):
+        if _in_ai_chat(state):
+            kept.append(pending)
+            return {**state, 'pending': pending}
+        return state
+
+    change_user_state(sender_id, store)
+    return bool(kept)
+
+
+def _answer_pending(sender_id, message, pending, confirmed, received, interface):
+    """Run or cancel the change the user was asked about: code only, no LLM."""
+    if not confirmed:
+        result = text_for('cancelled', pending.language)
+    elif pending.expired(received):
+        result = text_for('expired', pending.language)
+    else:
+        logging.info(f"AI Chat: {sender_id} confirmed: {pending.confirmation}")
+        result = pending.run()
+    add_conversation_message(str(sender_id), "user", message, pending.language)
+    add_conversation_message(str(sender_id), "assistant", result, pending.language)
+    send_message(result, sender_id, interface, numbered=True)
+
+
+def _ai_turn(sender_id, message, interface, received, pending):
+    """
+    One AI chat message, on the AI worker.
+
+    received is when the message came, and pending the change it answers,
+    if any. The user may have left AI chat since.
+    """
     try:
-        # Process the message using the chat handler
-        response = chat_handler.process_message(
-            sender_id=str(sender_id),
+        if message.lower() == 'r':
+            _take_pending(sender_id, asked_only=False)
+            clear_conversation_history(str(sender_id))
+            send_message("Conversation cleared.", sender_id, interface)
+            if _in_ai_chat(get_user_state(sender_id)):
+                send_message(AI_CHAT_MENU, sender_id, interface)
+            return
+
+        is_answer = answer_of(message) is not None
+        if pending and is_answer:
+            _answer_pending(sender_id, message, pending, answer_of(message), received, interface)
+            return
+        if is_answer and (get_user_state(sender_id) or {}).get('pending'):
+            # Sent before the confirmation it would answer went out: a resend, or too soon
+            logging.info(f"AI Chat: {sender_id} answered '{message}' before being asked, ignored")
+            return
+
+        chat_handler = _get_chat_handler()
+
+        if chat_handler is None:
+            send_message("AI Chat error. Try later.", sender_id, interface)
+            change_user_state(sender_id, lambda state: None if _in_ai_chat(state) else state)
+            return
+
+        if pending:
+            note = "The user didn't answer Y to your last confirmation, so that change was not made."
+        elif is_answer:
+            note = "No change is waiting for the user's Y/N, so none was made."
+        else:
+            note = None
+
+        turn = chat_handler.process_message(
+            sender_num=sender_id,
             message=message,
+            interface=interface,
             get_history_func=get_conversation_history,
             add_message_func=add_conversation_message,
-            clear_history_func=clear_conversation_history
+            note=note
         )
 
-        send_message(response, sender_id, interface)
-        update_user_state(sender_id, {'command': 'AI_CHAT', 'step': 1})
+        for text in turn.outbox:
+            send_message(text, sender_id, interface, numbered=True)
+        if turn.pending:
+            if not _store_pending(sender_id, turn.pending):
+                logging.info(f"AI Chat: {sender_id} left, not asking: {turn.pending.confirmation}")
+                return
+            send_message(turn.reply, sender_id, interface, numbered=True)
+            turn.pending.asked = time.monotonic()
+            return
+        if turn.reply:
+            send_message(turn.reply, sender_id, interface, numbered=True)
+        for done in turn.after_reply:
+            done()
 
-    except Exception as e:
-        logging.error(f"AI Chat error for {sender_id}: {e}")
+    except Exception:
+        # A Future would keep the exception to itself
+        logging.exception(f"AI Chat error for {sender_id}")
         send_message("Error. Try again.", sender_id, interface)
-        update_user_state(sender_id, {'command': 'AI_CHAT', 'step': 1})
