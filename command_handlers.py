@@ -655,7 +655,7 @@ def handle_read_bulletin_command(sender_id, message, state, interface):
             return
 
         bulletin_id = bulletins[message_number][0]
-        sender, date, subject, content, unique_id = get_bulletin_content(bulletin_id)
+        sender, date, subject, content, unique_id, bulletin_sender_id = get_bulletin_content(bulletin_id)
         response = f"Date: {date}\nFrom: {sender}\nSubject: {subject}\n\n{content}"
         send_message(response, sender_id, interface)
 
