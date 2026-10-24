@@ -1,4 +1,6 @@
 """Fixes in the classic menus and BBS sync."""
+from meshtastic import BROADCAST_NUM
+
 from conftest import FakeInterface
 from db_operations import add_bulletin, delete_bulletin, get_bulletin, get_bulletin_id
 from message_processing import process_message
@@ -22,6 +24,18 @@ def test_a_long_russian_bulletin_reaches_the_radio_whole(iface):
     received = ' '.join(iface.texts(alice)[1:])
     assert received.split()[-24:] == content.split()[-24:]
     assert len(iface.texts(alice)) > 3
+
+
+def test_pb_to_urgent_follows_the_allow_list(iface):
+    alice = iface.add_node(0x11111111, 'ALC')
+    bob = iface.add_node(0x22222222, 'BOB')
+    iface.allowed_nodes = ['!22222222']
+    process_message(alice, 'PB,,Urgent,,Fire,,Leave now', iface)
+    assert iface.texts(alice) == ["You don't have permission to post to this board."]
+    assert get_bulletin(1) is None and iface.texts(BROADCAST_NUM) == []
+    process_message(bob, 'PB,,urgent,,Fire,,Leave now', iface)
+    assert get_bulletin(1)[0] == 'urgent'
+    assert iface.texts(BROADCAST_NUM)[0].startswith('💥NEW URGENT BULLETIN💥')
 
 
 def test_a_deleted_bulletin_is_deleted_on_peers_by_its_unique_id():

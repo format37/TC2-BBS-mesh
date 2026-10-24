@@ -608,6 +608,11 @@ def handle_post_bulletin_command(sender_id, message, interface, bbs_nodes):
 
         _, board_name, subject, content = parts
         node_id = get_node_id_from_num(sender_id, interface)
+        if board_name.strip().lower() == 'urgent':
+            allowed_nodes = interface.allowed_nodes
+            if allowed_nodes and node_id not in allowed_nodes:
+                send_message("You don't have permission to post to this board.", sender_id, interface)
+                return
         sender_short_name = get_node_short_name(node_id, interface)
 
         unique_id = add_bulletin(board_name, sender_short_name, subject, content, bbs_nodes, interface, sender_id=node_id)
