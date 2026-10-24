@@ -12,7 +12,7 @@ from command_handlers import (
     handle_post_channel_command, handle_list_channels_command, handle_quick_help_command,
     handle_ai_command, handle_ai_steps, handle_last_users_command
 )
-from db_operations import add_bulletin, add_mail, delete_bulletin, delete_mail, get_db_connection, add_channel, record_user_activity
+from db_operations import add_bulletin, add_mail, delete_bulletin_by_unique_id, delete_mail, get_db_connection, add_channel, record_user_activity
 from js8call_integration import handle_js8call_command, handle_js8call_steps, handle_group_message_selection
 from utils import get_user_state, get_node_short_name, get_node_id_from_num, send_message
 
@@ -128,7 +128,7 @@ def process_message(sender_id, message, interface, is_sync_message=False):
             add_mail(sender_id, sender_short_name, recipient_id, subject, content, [], interface, unique_id=unique_id)
         elif message.startswith("DELETE_BULLETIN|"):
             unique_id = message.split("|")[1]
-            delete_bulletin(unique_id, [], interface)
+            delete_bulletin_by_unique_id(unique_id)
         elif message.startswith("DELETE_MAIL|"):
             unique_id = message.split("|")[1]
             logging.info(f"Processing delete mail with unique_id: {unique_id}")
