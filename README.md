@@ -240,7 +240,11 @@ The following device roles have been working:
 - **Client**
 - **Router_Client**
 
-The BBS hands the radio one message at a time: each message waits until the radio has answered the previous one (its ACK, or a NAK), for at most 30 seconds. Radios on the ESP32-S3's own USB port (Heltec V4, LILYGO T-Beam S3, and others that show up as an Espressif USB JTAG/serial device) lose a message that reaches them over USB while they are still reading the previous one, on firmware before 2.8.1 ([meshtastic/firmware#11864](https://github.com/meshtastic/firmware/issues/11864)). With such a radio, each message of a longer reply can take up to about 20 seconds to go out.
+The BBS hands the radio one message at a time: each message waits until the radio has answered the previous one (its ACK, or a NAK), for at most 30 seconds. Parts sent sooner collide on air with the receiver's ACK and are lost.
+
+Radios on the ESP32-S3's own USB port (Heltec V4, LILYGO T-Beam Supreme and others with USB ID `303a:1001`) read from USB slowly on firmware before 2.8.1: the serial console sleeps up to 20 seconds at a time ([meshtastic/firmware#11864](https://github.com/meshtastic/firmware/issues/11864)). Messages still arrive, but each one can take up to about 20 seconds to go out. The fix, [meshtastic/firmware#11901](https://github.com/meshtastic/firmware/pull/11901), is in 2.8.1, an alpha as of October 2026, and is small enough to apply to a 2.7 build. With it, each further part of a reply goes out about 4 seconds after the previous one.
+
+Before moving a BBS node to 2.8, note that 2.8 derives node IDs from the public key: the node's ID changes, so its users have to find it again.
 
 ## Features
 
