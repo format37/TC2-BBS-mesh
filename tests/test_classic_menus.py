@@ -54,3 +54,26 @@ def test_a_deleted_bulletin_is_deleted_on_peers_by_its_unique_id():
     # An old peer sends its local id: nothing is deleted, rather than a wrong bulletin
     process_message(peer, f'DELETE_BULLETIN|{other}', interface, is_sync_message=True)
     assert get_bulletin(other) is not None
+
+
+def test_the_main_menu_has_the_mesh_banner_and_fits_one_message(iface):
+    alice = iface.add_node(0x11111111, 'ALC')
+    process_message(alice, 'hi', iface)
+    menu = iface.texts(alice)[-1]
+    assert menu.startswith('•─•─•─•─•─•\n💾 TC² BBS  ✉️0\n•─•─•─•─•─•\n[Q]uick Commands\n')
+    assert len(menu.encode('utf-8')) <= 200 and len(iface.texts(alice)) == 1
+
+
+def test_the_board_menu_lists_each_board_with_its_count(iface):
+    alice = iface.add_node(0x11111111, 'ALC')
+    for subject in ('Party', 'Hike'):
+        add_bulletin('General', 'ALC', subject, 'x', [], iface, sender_id='!11111111')
+    add_bulletin('News', 'ALC', 'Radio', 'x', [], iface, sender_id='!11111111')
+    process_message(alice, 'b', iface)
+    process_message(alice, 'b', iface)
+    assert iface.texts(alice)[-1] == (
+        '📰Bulletin Menu📰\nWhich board would you like to enter?\n'
+        '[G]eneral (2)\n[I]nfo (0)\n[N]ews (1)\n[U]rgent (0)'
+    )
+    process_message(alice, 'n', iface)
+    assert iface.texts(alice)[-1].startswith('News has 1 messages.')

@@ -335,7 +335,7 @@ def test_menus_answer_while_an_ai_turn_runs(mesh, llm, monkeypatch):
     assert started.wait(5)
 
     # Meanwhile Bob gets the menus, and Alice her help
-    assert say(mesh, 'x', BOB)[0].startswith('💾TC² BBS💾')
+    assert say(mesh, 'x', BOB)[0].startswith('•─•─•─•─•─•\n💾 TC² BBS')
     assert say(mesh, 'h') == [command_handlers.AI_CHAT_MENU]
     assert 'Sunny.' not in mesh.texts(ALICE)
 

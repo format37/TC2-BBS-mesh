@@ -10,7 +10,7 @@ from ai_tools import answer_of, text_for
 
 from db_operations import (
     add_bulletin, add_mail, delete_mail, delete_bulletin,
-    get_bulletin_content, get_bulletins,
+    count_bulletins, get_bulletin_content, get_bulletins,
     get_mail, get_mail_content,
     add_channel, get_channels, delete_channel, get_sender_id_by_mail_id,
     add_conversation_message, get_conversation_history, clear_conversation_history,
@@ -84,6 +84,15 @@ def build_menu(items, menu_name):
             menu_str += "[L]ast users\n"
     return menu_str
 
+MESH_RULE = "•─•─•─•─•─•"
+BOARDS = ("General", "Info", "News", "Urgent")
+
+
+def main_menu_title(mail_count):
+    """The main menu's banner: the BBS name and the sender's mail count between two lines of mesh nodes."""
+    return f"{MESH_RULE}\n💾 TC² BBS  ✉️{mail_count}\n{MESH_RULE}"
+
+
 def handle_help_command(sender_id, interface, menu_name=None):
     if menu_name:
         update_user_state(sender_id, {'command': 'MENU', 'menu': menu_name, 'step': 1})
@@ -94,7 +103,7 @@ def handle_help_command(sender_id, interface, menu_name=None):
     else:
         update_user_state(sender_id, {'command': 'MAIN_MENU', 'step': 1})  # Reset to main menu state
         mail = get_mail(get_node_id_from_num(sender_id, interface))
-        response = build_menu(main_menu_items, f"💾TC² BBS💾 (✉️:{len(mail)})")
+        response = build_menu(main_menu_items, main_menu_title(len(mail)))
     send_message(response, sender_id, interface)
 
 def get_node_name(node_id, interface):
@@ -112,7 +121,8 @@ def handle_mail_command(sender_id, interface):
 
 
 def handle_bulletin_command(sender_id, interface):
-    response = f"📰Bulletin Menu📰\nWhich board would you like to enter?\n[G]eneral  [I]nfo  [N]ews  [U]rgent"
+    lines = [f"[{board[0]}]{board[1:]} ({count_bulletins(board)})" for board in BOARDS]
+    response = "📰Bulletin Menu📰\nWhich board would you like to enter?\n" + "\n".join(lines)
     send_message(response, sender_id, interface)
     update_user_state(sender_id, {'command': 'BULLETIN_MENU', 'step': 1})
 

@@ -706,7 +706,7 @@ def test_the_telegram_menu(bridge, iface, llm):
     assert say(iface, '9') == ['Not sent. Number to open, D+number to remove, e[X]it']
     assert say(iface, 'H') == [CHAT_MENU.format('wife')]
     [menu] = say(iface, 'x')
-    assert menu.startswith('💾TC² BBS💾') and '[A]I Chat\n[T]elegram\nE[X]IT' in menu
+    assert menu.startswith('•─•─•─•─•─•\n💾 TC² BBS') and '[A]I Chat\n[T]elegram\nE[X]IT' in menu
     assert get_user_state(ALEX) == {'command': 'MAIN_MENU', 'step': 1}
     # The main menu's letters and the quick commands still work inside the chat
     for letter, answer in [('q', '✈️QUICK COMMANDS✈️'), ('b', '📰BBS Menu📰'), ('u', '🛠️Utilities Menu🛠️'),
@@ -724,7 +724,7 @@ def test_the_telegram_menu(bridge, iface, llm):
     say(iface, 'T')
     assert say(iface, 'L')[0].startswith('1 wife (Anna @anna)\n2 bob (waiting)\n3 olga (Ольга)*')
     say(iface, '1')
-    assert say(iface, 'x')[0].startswith('💾TC² BBS💾')
+    assert say(iface, 'x')[0].startswith('•─•─•─•─•─•\n💾 TC² BBS')
     assert say(iface, 'T') == [CHAT_MENU.format('wife')]
 
 
