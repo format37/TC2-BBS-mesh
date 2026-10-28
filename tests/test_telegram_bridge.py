@@ -29,6 +29,7 @@ ANNA = {'id': 501, 'is_bot': False, 'first_name': 'Anna', 'username': 'anna', 'l
 OLGA = {'id': 502, 'is_bot': False, 'first_name': 'Ольга', 'language_code': 'ru'}
 RUSSIAN = 'Купи молока и хлеба, вечером зайдём к маме. '
 CHAT_MENU = '📱Telegram: {}\nWrite here. [L]ist [I]nvite [P]osition [H]elp e[X]it'
+INVITE = 'Chat with me through this bot:\nt.me/bbstestbot?start='
 
 
 class FakeTelegram:
@@ -177,7 +178,8 @@ def test_an_invite_links_a_telegram_user_and_both_sides_are_told(bridge, iface):
     assert say(iface, 'I') == ['Name for the contact? (e.g. wife)']
     [reply] = say(iface, 'wife')
     code = re.search(r'start=(\w+)', reply).group(1)
-    assert reply == f'Invite for wife:\nt.me/bbstestbot?start={code}\nValid 7 days, one use. Share it with them.'
+    # Ready to forward to the Telegram person as it is
+    assert reply == f'Chat with me through this bot:\nt.me/bbstestbot?start={code}\nValid 7 days, one use.'
     assert len(code) == 6 and set(code) <= set('ABCDEFGHJKLMNPQRSTUVWXYZ23456789')
     [contact] = get_telegram_contacts(ALEX_ID)
     assert (contact.name, contact.tg_user_id, contact.invite_code) == ('wife', None, code)
@@ -267,16 +269,18 @@ def test_contact_names(bridge, iface):
     too_long = "Name: 1-16 characters, no ':'. Another name, or e[X]it"
     assert say(iface, 'a' * 17) == [too_long]
     assert say(iface, 'my: wife') == [too_long]
-    assert say(iface, 'Жена')[0].startswith('Invite for Жена:')
+    assert say(iface, 'Жена')[0].startswith(INVITE)
     say(iface, 'I')
     assert say(iface, 'жена') == ['You already have жена. Another name, or e[X]it']
-    assert say(iface, 'Wife')[0].startswith('Invite for Wife:')
+    assert say(iface, 'Wife')[0].startswith(INVITE)
     say(iface, 'I')
     assert say(iface, 'WIFE') == ['You already have WIFE. Another name, or e[X]it']
     # Another node may use the same names
     say(iface, 'T', MIKE)
     say(iface, 'I', MIKE)
-    assert say(iface, 'жена', MIKE)[0].startswith('Invite for жена:')
+    assert say(iface, 'жена', MIKE)[0].startswith(INVITE)
+    assert [contact.name for contact in get_telegram_contacts(ALEX_ID)] == ['Жена', 'Wife']
+    assert [contact.name for contact in get_telegram_contacts(MIKE_ID)] == ['жена']
 
 
 def test_an_invite_needs_the_bots_name_from_telegram(bridge, iface):
