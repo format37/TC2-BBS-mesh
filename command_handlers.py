@@ -1178,7 +1178,8 @@ def _telegram_invite(sender_id, message, interface, node_id, current):
     if problem is not None:
         send_message(problem, sender_id, interface)
         return
+    # Written to the Telegram person, so the mesh user can forward it as it is
     days = _bridge.settings.invite_ttl_days
-    send_message(f"Invite for {name}:\n{_bridge.invite_link(code)}\n"
-                 f"Valid {days} day{'' if days == 1 else 's'}, one use. Share it with them.", sender_id, interface)
+    send_message(f"Chat with me through this bot:\n{_bridge.invite_link(code)}\n"
+                 f"Valid {days} day{'' if days == 1 else 's'}, one use.", sender_id, interface)
     _telegram_state(sender_id, 1, get_telegram_contact(contact_id))

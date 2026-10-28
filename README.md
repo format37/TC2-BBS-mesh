@@ -308,7 +308,7 @@ Without a token the bridge is off, and `T` says so. The bridge long-polls Telegr
 
 Send `T` in the main menu. It opens the chat with the contact you used last, or offers an invite if you have none.
 
-- `I` asks for a name for the contact, say `wife`, then sends an invite link such as `t.me/yourbot?start=AB7K2M`. Hand it to that person. It works once and expires after `invite_ttl_days`.
+- `I` asks for a name for the contact, say `wife`, then sends an invite to forward to that person as it is: `Chat with me through this bot:` and a link such as `t.me/yourbot?start=AB7K2M`. It works once and expires after `invite_ttl_days`.
 - When they open it, you get `wife (Anna @anna) joined your Telegram chat.`
 - In the chat, each message you send goes to the contact. Nothing comes back when it reached Telegram. A failure says why, for example `Not sent to Telegram: wife blocked the bot`.
 - Their messages arrive as `wife: Buy milk`, or numbered `1/2 wife: ...` when they take several radio messages. If one arrives while you are at the main menu, or not in any menu, your next message is the reply.
