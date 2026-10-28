@@ -2,7 +2,8 @@ import logging
 import sqlite3
 import threading
 import uuid
-from datetime import datetime
+from collections import namedtuple
+from datetime import datetime, timedelta, timezone
 
 from meshtastic import BROADCAST_NUM
 
@@ -73,6 +74,35 @@ def initialize_database():
     c.execute('''CREATE TABLE IF NOT EXISTS bulletin_seen (
                     node_id TEXT PRIMARY KEY,
                     last_bulletin_id INTEGER NOT NULL
+                );''')
+    # The Telegram bridge. A contact is a link from a node to a Telegram user,
+    # or, while tg_user_id is NULL, the invite that will make one.
+    c.execute('''CREATE TABLE IF NOT EXISTS telegram_contacts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    node_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    tg_user_id INTEGER,
+                    tg_chat_id INTEGER,
+                    tg_name TEXT,
+                    invite_code TEXT,
+                    invite_expires TEXT,
+                    created TEXT NOT NULL,
+                    last_used TEXT,
+                    UNIQUE(node_id, tg_user_id)
+                );''')
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS telegram_contacts_name "
+              "ON telegram_contacts (node_id, name COLLATE NOCASE)")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS telegram_contacts_code ON telegram_contacts (invite_code)")
+    # The Telegram side's state: the link a Telegram user writes to
+    c.execute('''CREATE TABLE IF NOT EXISTS telegram_users (
+                    tg_user_id INTEGER PRIMARY KEY,
+                    current_contact_id INTEGER,
+                    language TEXT
+                );''')
+    # The mesh user's bridge settings
+    c.execute('''CREATE TABLE IF NOT EXISTS telegram_nodes (
+                    node_id TEXT PRIMARY KEY,
+                    share_position INTEGER NOT NULL DEFAULT 1
                 );''')
     conn.commit()
     print("Database schema initialized.")
@@ -365,3 +395,147 @@ def get_last_users(limit=3):
         (limit,)
     )
     return c.fetchall()
+
+
+# Telegram bridge
+
+TelegramContact = namedtuple('TelegramContact', [
+    'id', 'node_id', 'name', 'tg_user_id', 'tg_chat_id', 'tg_name',
+    'invite_code', 'invite_expires', 'created', 'last_used'])
+_CONTACT_COLUMNS = ', '.join(TelegramContact._fields)
+
+
+def utc_stamp(offset_seconds=0):
+    """A UTC time as the Telegram tables keep it: text that sorts in time order."""
+    return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).strftime('%Y-%m-%d %H:%M:%S.%f')
+
+
+def _contacts(where, args):
+    c = get_db_connection().cursor()
+    c.execute(f"SELECT {_CONTACT_COLUMNS} FROM telegram_contacts WHERE {where}", args)
+    return [TelegramContact(*row) for row in c.fetchall()]
+
+
+def add_telegram_invite(node_id, name, code, expires):
+    """
+    A contact that waits for its invite code; returns its id.
+
+    Raises sqlite3.IntegrityError when the node has a contact by that name or the code is taken.
+    """
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("INSERT INTO telegram_contacts (node_id, name, invite_code, invite_expires, created) VALUES (?, ?, ?, ?, ?)",
+              (node_id, name, code, expires, utc_stamp()))
+    conn.commit()
+    return c.lastrowid
+
+
+def get_telegram_contact(contact_id):
+    found = _contacts("id = ?", (contact_id,))
+    return found[0] if found else None
+
+
+def get_telegram_contacts(node_id):
+    """A node's contacts, linked and waiting, in the order they were made."""
+    return _contacts("node_id = ? ORDER BY id", (node_id,))
+
+
+def get_recent_telegram_contact(node_id):
+    """The contact T opens: the linked one used last, else the newest invite; None if the node has none."""
+    found = _contacts("node_id = ? ORDER BY tg_user_id IS NULL, COALESCE(last_used, created) DESC, id DESC LIMIT 1",
+                      (node_id,))
+    return found[0] if found else None
+
+
+def get_telegram_links(tg_user_id):
+    """The contacts a Telegram user is linked through, one per node, in the order they were made."""
+    return _contacts("tg_user_id = ? ORDER BY id", (tg_user_id,))
+
+
+def find_telegram_invite(code, now=None):
+    """The contact waiting for this invite code, if the code is valid at now (UTC stamp)."""
+    found = _contacts("tg_user_id IS NULL AND invite_code = ? AND invite_expires > ?", (code, now or utc_stamp()))
+    return found[0] if found else None
+
+
+def redeem_telegram_invite(contact_id, code, tg_user_id, tg_chat_id, tg_name):
+    """Link the contact waiting for code to a Telegram user; False if the invite is gone meanwhile."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE telegram_contacts SET tg_user_id = ?, tg_chat_id = ?, tg_name = ?, invite_code = NULL, "
+        "invite_expires = NULL, last_used = ? WHERE id = ? AND invite_code = ? AND tg_user_id IS NULL",
+        (tg_user_id, tg_chat_id, tg_name, utc_stamp(), contact_id, code))
+    conn.commit()
+    return c.rowcount == 1
+
+
+def touch_telegram_contact(contact_id):
+    """A message went between the node and this contact: T opens it next."""
+    conn = get_db_connection()
+    conn.execute("UPDATE telegram_contacts SET last_used = ? WHERE id = ?", (utc_stamp(), contact_id))
+    conn.commit()
+
+
+def delete_telegram_contact(contact_id):
+    """Remove a contact or invite. A Telegram user left with no link is forgotten."""
+    contact = get_telegram_contact(contact_id)
+    if contact is None:
+        return
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM telegram_contacts WHERE id = ?", (contact_id,))
+    c.execute("UPDATE telegram_users SET current_contact_id = NULL WHERE current_contact_id = ?", (contact_id,))
+    if contact.tg_user_id is not None:
+        c.execute("DELETE FROM telegram_users WHERE tg_user_id = ? AND NOT EXISTS "
+                  "(SELECT 1 FROM telegram_contacts WHERE tg_user_id = ?)", (contact.tg_user_id, contact.tg_user_id))
+    conn.commit()
+
+
+def purge_expired_telegram_invites(now=None):
+    """Delete the invites nobody redeemed in time; returns how many."""
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM telegram_contacts WHERE tg_user_id IS NULL AND invite_expires <= ?", (now or utc_stamp(),))
+    conn.commit()
+    return c.rowcount
+
+
+def get_telegram_user(tg_user_id):
+    """(current_contact_id, language) of a Telegram user; (None, None) for one the bridge doesn't know."""
+    c = get_db_connection().cursor()
+    c.execute("SELECT current_contact_id, language FROM telegram_users WHERE tg_user_id = ?", (tg_user_id,))
+    return c.fetchone() or (None, None)
+
+
+def set_telegram_current(tg_user_id, contact_id):
+    """The link a Telegram user's messages go to."""
+    conn = get_db_connection()
+    conn.execute("INSERT INTO telegram_users (tg_user_id, current_contact_id) VALUES (?, ?) "
+                 "ON CONFLICT(tg_user_id) DO UPDATE SET current_contact_id = excluded.current_contact_id",
+                 (tg_user_id, contact_id))
+    conn.commit()
+
+
+def set_telegram_language(tg_user_id, language):
+    conn = get_db_connection()
+    conn.execute("INSERT INTO telegram_users (tg_user_id, language) VALUES (?, ?) "
+                 "ON CONFLICT(tg_user_id) DO UPDATE SET language = excluded.language",
+                 (tg_user_id, language))
+    conn.commit()
+
+
+def get_telegram_share_position(node_id):
+    """Whether the node's Telegram contacts may ask where it is (on unless the node switched it off)."""
+    c = get_db_connection().cursor()
+    c.execute("SELECT share_position FROM telegram_nodes WHERE node_id = ?", (node_id,))
+    row = c.fetchone()
+    return bool(row[0]) if row else True
+
+
+def set_telegram_share_position(node_id, share):
+    conn = get_db_connection()
+    conn.execute("INSERT INTO telegram_nodes (node_id, share_position) VALUES (?, ?) "
+                 "ON CONFLICT(node_id) DO UPDATE SET share_position = excluded.share_position",
+                 (node_id, int(share)))
+    conn.commit()

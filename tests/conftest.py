@@ -28,7 +28,7 @@ CONFIG = f"""\
 type = serial
 
 [menu]
-main_menu_items = Q, B, U, A, X
+main_menu_items = Q, B, U, A, T, X
 bbs_menu_items = M, B, C, X
 utilities_menu_items = S, F, W, L, X
 
@@ -69,6 +69,8 @@ class FakeInterface:
         self.oversize = []      # payloads the radio would reject
         self.acks = True        # ACK every message at once; else answer() them later
         self.unanswered = []    # (packet id, response handler), while acks is False
+        self.listeners = []     # get every routing packet, as subscribers of meshtastic.receive do
+        self.acked_by = None    # a node that ACKs each message as soon as it is handed over
 
     def add_node(self, num, short_name, long_name=None, last_heard=None, battery=None):
         node_id = f'!{num:08x}'
@@ -91,6 +93,9 @@ class FakeInterface:
             self.oversize.append(text)
         self.sent.append((destinationId, text))
         packet = SimpleNamespace(id=len(self.sent))
+        if self.acked_by is not None:
+            # The node's ACK can come before the sender gets the packet id back
+            self.ack(packet.id, self.acked_by)
         if onResponse is not None:
             self.unanswered.append((packet.id, onResponse))
             if self.acks:
@@ -98,10 +103,24 @@ class FakeInterface:
         return packet
 
     def answer(self, reason='NONE'):
-        """The oldest unanswered message gets its ACK, or a NAK for reason."""
+        """The oldest unanswered message gets the radio's first answer: an implicit ACK, or a NAK for reason."""
         packet_id, on_response = self.unanswered.pop(0)
-        on_response({'from': BBS_NUM, 'decoded': {'portnum': 'ROUTING_APP', 'requestId': packet_id,
-                                                  'routing': {'errorReason': reason}}})
+        packet = self.routing(packet_id, BBS_NUM, reason)
+        on_response(packet)
+        self.publish(packet)
+
+    def ack(self, packet_id, sender, reason='NONE'):
+        """A routing packet from sender about packet_id: the destination's ACK, or a NAK."""
+        self.publish(self.routing(packet_id, sender, reason))
+
+    @staticmethod
+    def routing(packet_id, sender, reason='NONE'):
+        return {'from': sender, 'decoded': {'portnum': 'ROUTING_APP', 'requestId': packet_id,
+                                            'routing': {'errorReason': reason}}}
+
+    def publish(self, packet):
+        for listener in self.listeners:
+            listener(packet, self)
 
     def texts(self, destination):
         return [text for dest, text in self.sent if dest == destination]

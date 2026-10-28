@@ -15,7 +15,7 @@ If you're a Docker user, TC²-BBS Meshtastic is available on Docker Hub!
 - Python 3.x
 - Meshtastic
 - pypubsub
-- openai and requests (for the AI Chat)
+- openai and requests (for the AI Chat; requests also for the Telegram bridge)
 
 ### Update and Install Git
    
@@ -119,6 +119,17 @@ If you're a Docker user, TC²-BBS Meshtastic is available on Docker Hub!
    api_key = pplx-your-api-key-here
    ```
 
+   **[telegram]**  
+   Limits of the Telegram bridge; see [Telegram Bridge](#telegram-bridge). The bot token is not in `config.ini`: it comes from the `TELEGRAM_BOT_TOKEN` environment variable.
+
+   ```ini
+   [telegram]
+   max_messages = 3
+   max_per_hour = 60
+   invite_ttl_days = 7
+   delivery_window = 120
+   ```
+
 ### Running the Server
 
 Run the server with:
@@ -136,7 +147,7 @@ pip install pytest
 pytest tests
 ```
 
-The tests use a fake radio and a scripted LLM: they never call the real APIs.
+The tests use a fake radio, a fake Telegram and a scripted LLM: they never call the real APIs.
 
 ## Command line arguments
 ```
@@ -255,6 +266,7 @@ Before moving a BBS node to 2.8, note that 2.8 derives node IDs from the public 
 - **Wall of Shame**: View devices with low battery levels.
 - **Fortune Teller**: Get a random fortune. Pulls from the fortunes.txt file. Feel free to edit this file remove or add more if you like.
 - **AI Chat**: Talk to an AI assistant in plain language, in English, Russian or Georgian. See [AI Chat](#ai-chat).
+- **Telegram Bridge**: Chat with people on Telegram through the BBS's bot. Each user invites their own contacts. See [Telegram Bridge](#telegram-bridge).
 
 ## Usage
 
@@ -278,6 +290,47 @@ Original mail and bulletin texts are sent to you word for word. Replies take at 
 Nothing changes until you confirm. Before it sends mail, posts or deletes anything, the BBS asks, for example `Delete bulletin #12 "Party" (General)? Y/N`. Answer `Y` (or `да`, `კი`) to go ahead, `N` to cancel; anything else cancels and is taken as a new message. A confirmation expires after 10 minutes. You can delete only your own mail and bulletins (the admin node can delete any bulletin), and posting to Urgent follows `[allow_list]`.
 
 Send `R` to reset the conversation, `H` for help, `X` to exit.
+
+### Telegram Bridge
+
+BBS users chat with people on Telegram through one bot that the BBS runs. A Telegram user can reach a radio user only after redeeming an invite that this radio user made.
+
+**Setting it up**
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. Copy `.env.example` to `.env`, next to `docker-compose.yaml`, and set `TELEGRAM_BOT_TOKEN`. `.env` is gitignored: never commit it. Docker Compose passes the variable to the container, and `python server.py` reads `.env` from the working directory or from next to `server.py`.
+3. Add `T` to `main_menu_items` in `config.ini`, and a `[telegram]` section if the defaults don't suit you.
+4. Restart the BBS. The log shows `Telegram bridge: bot @yourbot, polling`.
+
+Without a token the bridge is off, and `T` says so. The bridge long-polls Telegram, so the BBS needs no public address. Run one BBS per bot, and test on a second bot: two instances polling with one token split the messages between them, and the log says `CONFLICT`.
+
+**On the radio**
+
+Send `T` in the main menu. It opens the chat with the contact you used last, or offers an invite if you have none.
+
+- `I` asks for a name for the contact, say `wife`, then sends an invite link such as `t.me/yourbot?start=AB7K2M`. Hand it to that person. It works once and expires after `invite_ttl_days`.
+- When they open it, you get `wife (Anna @anna) joined your Telegram chat.`
+- In the chat, each message you send goes to the contact. Nothing comes back when it reached Telegram. A failure says why, for example `Not sent to Telegram: wife blocked the bot`.
+- Their messages arrive as `wife: Buy milk`, or numbered `1/2 wife: ...` when they take several radio messages. If one arrives while you are at the main menu, or not in any menu, your next message is the reply.
+- `L` lists your contacts. Send a number to switch to one, or `D` and a number to remove one; `Y` confirms, and they are told. `P` turns position sharing on or off. `H` shows the menu, `X` exits.
+- `Q`, `B`, `U`, `A`, `T`, `X` alone, and the quick commands such as `CM`, keep their BBS meaning in the chat, so they never go to Telegram.
+
+**On Telegram**
+
+After redeeming the invite, write to the bot: each message goes to the radio user. One message may take up to `max_messages` radio messages, about 580 Latin or 290 Cyrillic characters; a longer one is refused, with the numbers. One contact may cause up to `max_per_hour` radio messages an hour. Only text reaches the radio.
+
+The bot puts a reaction on each message: 🕊 when the radio confirmed every part, 🙈 when the radio reported a failure or didn't confirm within `delivery_window` seconds. A confirmation that comes later still turns 🙈 into 🕊.
+
+| Command | Does |
+|---|---|
+| `/contacts` | the radio users who invited you, as buttons to switch between them |
+| `/to NAME` | write to another of them |
+| `/status` | when the BBS last heard the radio |
+| `/where` | the radio's last known position as a map pin, unless its user turned `P` off |
+| `/leave NAME` | disconnect |
+| `/help` | the limits and commands |
+
+The bot answers in Russian to users whose Telegram is set to Russian, and in English otherwise. Nobody uninvited can reach a radio or learn anything about the mesh from the bot, and groups are ignored. The BBS keeps no copy of the messages beyond its log.
 
 A video of it in use is available on our YouTube channel:
 

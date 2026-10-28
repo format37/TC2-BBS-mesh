@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 import threading
 import time
@@ -132,7 +133,9 @@ def _on_answer(answered):
 
 
 def send_message(message, destination, interface, numbered=False, max_bytes=MAX_PAYLOAD_BYTES):
+    """Send message as radio messages of at most max_bytes; returns the ids of the packets handed to the radio."""
     global _answered, _handed_at
+    ids = []
     for chunk in split_message(message, max_bytes, numbered):
         try:
             with _send_lock:
@@ -149,12 +152,32 @@ def send_message(message, destination, interface, numbered=False, max_bytes=MAX_
                     onResponseAckPermitted=True,
                 )
                 _answered, _handed_at = answered, time.monotonic()
+                ids.append(d.id)
             destid = get_node_id_from_num(destination, interface)
             size = len(chunk.encode('utf-8'))
             chunk = chunk.replace('\n', '\\n')
             logging.info(f"Sending message to user '{get_node_short_name(destid, interface)}' ({destid}) with sendID {d.id} ({size} bytes): \"{chunk}\"")
         except Exception as e:
             logging.info(f"REPLY SEND ERROR {e}")
+    return ids
+
+
+def load_env_file(*paths):
+    """
+    Read KEY=value lines from the first of paths that exists into os.environ.
+
+    A variable that is already set keeps its value. Returns the path read, or None.
+    """
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                key, sep, value = line.strip().partition('=')
+                if sep and key and not key.startswith('#'):
+                    os.environ.setdefault(key.strip(), value.strip().strip('\'"'))
+        return path
+    return None
 
 
 def get_node_info(interface, short_name):
