@@ -14,8 +14,12 @@ from db_operations import (
     get_mail, get_mail_content,
     add_channel, get_channels, delete_channel, get_sender_id_by_mail_id,
     add_conversation_message, get_conversation_history, clear_conversation_history,
-    get_last_users
+    get_last_users,
+    get_recent_telegram_contact, get_telegram_contact, get_telegram_contacts,
+    get_telegram_share_position, purge_expired_telegram_invites, set_telegram_share_position,
+    touch_telegram_contact
 )
+from telegram_bridge import RADIO_NOT_SENT, contact_name_problem
 from utils import (
     change_user_state, get_node_id_from_num, get_node_info,
     get_node_short_name, get_user_state, send_message,
@@ -74,6 +78,8 @@ def build_menu(items, menu_name):
             menu_str += "[W]all of Shame\n"
         elif item.strip() == 'A':
             menu_str += "[A]I Chat\n"
+        elif item.strip() == 'T':
+            menu_str += "[T]elegram\n"
         elif item.strip() == 'L':
             menu_str += "[L]ast users\n"
     return menu_str
@@ -1006,3 +1012,173 @@ def _ai_turn(sender_id, message, interface, received, pending):
         # A Future would keep the exception to itself
         logging.exception(f"AI Chat error for {sender_id}")
         send_message("Error. Try again.", sender_id, interface)
+
+
+# Telegram bridge: the mesh side. telegram_bridge.py runs the bot; server.py
+# sets it here when TELEGRAM_BOT_TOKEN is set, else T says it is off.
+
+_bridge = None
+
+TELEGRAM_OFF = "Telegram bridge is not configured."
+TELEGRAM_NO_CONTACTS = "📱Telegram📱\nNo contacts yet. [I]nvite someone, e[X]it"
+TELEGRAM_CHAT_MENU = "📱Telegram: {title}\nWrite here. [L]ist [I]nvite [P]osition [H]elp e[X]it"
+TELEGRAM_LIST_END = "Number to open, D+number to remove, e[X]it"
+
+
+def set_telegram_bridge(bridge):
+    global _bridge
+    _bridge = bridge
+
+
+def _node_id_of(sender_id):
+    return f'!{sender_id:08x}'
+
+
+def _contact_title(contact):
+    return contact.name if contact.tg_user_id is not None else f'{contact.name} (waiting)'
+
+
+def _own_contact(contact_id, node_id):
+    """The node's contact with this id; None if it is gone or another node's."""
+    contact = get_telegram_contact(contact_id) if contact_id is not None else None
+    return contact if contact is not None and contact.node_id == node_id else None
+
+
+def _telegram_state(sender_id, step, contact, **extra):
+    update_user_state(sender_id, {'command': 'TELEGRAM_CHAT', 'step': step,
+                                  'contact_id': contact.id if contact else None, **extra})
+
+
+def _open_telegram_chat(sender_id, interface, contact):
+    """Show a contact's chat and make it the one the user writes to; with no contact, the empty menu."""
+    if contact is None:
+        send_message(TELEGRAM_NO_CONTACTS, sender_id, interface)
+    else:
+        send_message(TELEGRAM_CHAT_MENU.format(title=_contact_title(contact)), sender_id, interface)
+    _telegram_state(sender_id, 1, contact)
+
+
+def handle_telegram_command(sender_id, interface):
+    """T in the main menu: the chat with the contact used last."""
+    if _bridge is None:
+        send_message(TELEGRAM_OFF, sender_id, interface)
+        update_user_state(sender_id, None)
+        return
+    purge_expired_telegram_invites()
+    _open_telegram_chat(sender_id, interface, get_recent_telegram_contact(_node_id_of(sender_id)))
+
+
+def handle_telegram_steps(sender_id, message, step, state, interface):
+    """
+    The Telegram menu. Step 1 is the chat: a message goes to the current
+    contact, and single letters are commands. Step 2 is the list, step 3 asks
+    the name for an invite, step 4 confirms a removal. process_message sends
+    X, Q, B, U, A, T and the quick commands elsewhere before this runs.
+    """
+    if _bridge is None:
+        handle_telegram_command(sender_id, interface)
+        return
+    message = message.strip()
+    command = message.lower()
+    node_id = _node_id_of(sender_id)
+    contact = _own_contact(state.get('contact_id'), node_id)
+
+    if command in ('h', ''):
+        _open_telegram_chat(sender_id, interface, contact or get_recent_telegram_contact(node_id))
+    elif step == 3:
+        _telegram_invite(sender_id, message, interface, node_id, contact)
+    elif step == 4:
+        _telegram_remove(sender_id, message, state, interface, node_id, contact)
+    elif command == 'l':
+        _telegram_list(sender_id, interface, node_id, contact)
+    elif command == 'i':
+        send_message("Name for the contact? (e.g. wife)", sender_id, interface)
+        _telegram_state(sender_id, 3, contact)
+    elif command == 'p':
+        share = not get_telegram_share_position(node_id)
+        set_telegram_share_position(node_id, share)
+        send_message(f"Position for Telegram contacts: {'on' if share else 'off'}", sender_id, interface)
+    elif step == 2:
+        _telegram_pick(sender_id, command, state, interface, node_id, contact)
+    elif contact is None:
+        if state.get('contact_id') is not None:
+            send_message(RADIO_NOT_SENT.format(reason="that contact was removed"), sender_id, interface)
+        _open_telegram_chat(sender_id, interface, get_recent_telegram_contact(node_id))
+    elif contact.tg_user_id is None:
+        send_message(RADIO_NOT_SENT.format(reason=f"{contact.name} hasn't joined yet"), sender_id, interface)
+    else:
+        # Nothing comes back on success: the radio already showed BBS0's ACK
+        _bridge.send_to_telegram(node_id, contact.id, message)
+
+
+def _telegram_list(sender_id, interface, node_id, current):
+    """L: the contacts, numbered; * marks the one the user writes to."""
+    purge_expired_telegram_invites()
+    contacts = get_telegram_contacts(node_id)
+    if not contacts:
+        _open_telegram_chat(sender_id, interface, None)
+        return
+    lines = [f"{i} {c.name} ({c.tg_name if c.tg_user_id is not None else 'waiting'})"
+             f"{'*' if current is not None and c.id == current.id else ''}"
+             for i, c in enumerate(contacts, 1)]
+    send_message('\n'.join(lines + [TELEGRAM_LIST_END]), sender_id, interface)
+    _telegram_state(sender_id, 2, current, contacts=[c.id for c in contacts])
+
+
+def _telegram_pick(sender_id, command, state, interface, node_id, current):
+    """Step 2: a number opens that contact, D and a number asks to remove it."""
+    remove = command.startswith('d')
+    number = command[1:].strip() if remove else command
+    listed = state.get('contacts') or []
+    picked = None
+    if number.isdecimal() and 1 <= int(number) <= len(listed):
+        picked = _own_contact(listed[int(number) - 1], node_id)
+    if picked is None:
+        send_message(f"Not sent. {TELEGRAM_LIST_END}", sender_id, interface)
+    elif remove:
+        send_message(f"Remove {picked.name}? Y/N", sender_id, interface)
+        _telegram_state(sender_id, 4, current, remove_id=picked.id)
+    else:
+        touch_telegram_contact(picked.id)   # T opens it next time
+        send_message(f"Telegram: {_contact_title(picked)}", sender_id, interface)
+        _telegram_state(sender_id, 1, picked)
+
+
+def _telegram_remove(sender_id, message, state, interface, node_id, current):
+    """Step 4: Y removes the contact, and a linked one is told on Telegram; anything else keeps it."""
+    target = _own_contact(state.get('remove_id'), node_id)
+    if target is None:
+        send_message("Already removed.", sender_id, interface)
+    elif answer_of(message) is True:
+        _bridge.remove_contact(target)
+        send_message(f"{target.name} removed.", sender_id, interface)
+        if current is not None and current.id == target.id:
+            current = None
+    else:
+        send_message("Not removed.", sender_id, interface)
+    _telegram_state(sender_id, 1, current or get_recent_telegram_contact(node_id))
+
+
+def _telegram_invite(sender_id, message, interface, node_id, current):
+    """Step 3: the name for a new contact, then the invite to hand them."""
+    purge_expired_telegram_invites()
+    name = message
+    problem = contact_name_problem(name)
+    if problem is None and any(c.name.casefold() == name.casefold() for c in get_telegram_contacts(node_id)):
+        problem = f"You already have {name}. Another name, or e[X]it"
+    if problem is None and _bridge.username is None:
+        send_message("Telegram is unreachable now. Try again later.", sender_id, interface)
+        _telegram_state(sender_id, 1, current)
+        return
+    if problem is None:
+        try:
+            contact_id, code = _bridge.create_invite(node_id, name)
+        except ValueError:
+            problem = f"You already have {name}. Another name, or e[X]it"
+    if problem is not None:
+        send_message(problem, sender_id, interface)
+        return
+    days = _bridge.settings.invite_ttl_days
+    send_message(f"Invite for {name}:\n{_bridge.invite_link(code)}\n"
+                 f"Valid {days} day{'' if days == 1 else 's'}, one use. Share it with them.", sender_id, interface)
+    _telegram_state(sender_id, 1, get_telegram_contact(contact_id))

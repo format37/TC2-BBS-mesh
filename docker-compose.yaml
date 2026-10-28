@@ -4,6 +4,8 @@ services:
     restart: always
     environment:
       - TZ=Asia/Tbilisi
+      # From .env next to this file (see .env.example); empty turns the Telegram bridge off
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
     volumes:
       - ./data:/home/mesh/bbs/config
     devices:

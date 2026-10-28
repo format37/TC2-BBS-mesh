@@ -182,3 +182,15 @@ def test_a_sync_message_to_another_bbs_goes_whole_up_to_the_radios_limit():
                                '0d3c6a1e-1111-2222-3333-444455556666', ['!0c000001'], interface)
     [(destination, text)] = interface.sent
     assert destination == '!0c000001' and 200 < len(text.encode('utf-8')) <= 233
+
+
+def test_send_message_returns_the_ids_of_the_packets_it_handed_over(iface):
+    # The Telegram bridge looks for the node's ACK of each of them
+    assert send_message('word ' * 60, 42, iface) == [1, 2]
+    assert send_message('Menu', 42, iface) == [3]
+
+    def failing_send(data, destinationId, **kwargs):
+        raise RuntimeError('radio gone')
+
+    iface.sendData = failing_send
+    assert send_message('Menu', 42, iface) == []
