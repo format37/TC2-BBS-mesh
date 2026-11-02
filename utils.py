@@ -121,14 +121,44 @@ def truncate(text, max_bytes, ending='...'):
     return text[:_cut_point(text, limit)].rstrip(' \t\n,.;:-–—') + ending
 
 
-def _on_answer(answered):
+def describe_route(packet):
+    """How a received packet got here, for the log: hops, the node that last sent it, the signal."""
+    parts = []
+    hop_start = packet.get('hopStart')
+    if hop_start:
+        # meshtastic leaves out fields that are 0, so a missing hopLimit means all hops were used
+        hops = hop_start - packet.get('hopLimit', 0)
+        parts.append('direct' if hops == 0 else f"{hops} hop{'s' if hops > 1 else ''}")
+    if packet.get('relayNode') is not None:
+        # The last byte of the node number of whoever transmitted it last: the sender itself when direct
+        parts.append(f"relay 0x{packet['relayNode']:02x}")
+    if 'rxSnr' in packet:
+        parts.append(f"SNR {packet['rxSnr']}")
+    if 'rxRssi' in packet:
+        parts.append(f"RSSI {packet['rxRssi']}")
+    if packet.get('viaMqtt'):
+        parts.append('via MQTT')
+    return ', '.join(parts) or 'route unknown'
+
+
+def _on_answer(answered, interface):
     """The response handler of a message: the radio answered it. Runs on meshtastic's reader thread, so never raises."""
     def on_response(packet):
         answered.set()
-        decoded = packet.get('decoded') or {}
-        reason = (decoded.get('routing') or {}).get('errorReason', 'NONE')
-        if reason != 'NONE':
-            logging.info(f"sendID {decoded.get('requestId')} was not delivered: {reason}")
+        try:
+            decoded = packet.get('decoded') or {}
+            request_id = decoded.get('requestId')
+            reason = (decoded.get('routing') or {}).get('errorReason', 'NONE')
+            if reason != 'NONE':
+                logging.info(f"sendID {request_id} was not delivered: {reason}")
+            elif packet.get('from') == interface.myInfo.my_node_num:
+                # The radio heard another node relay it; the node's own ACK may follow, unreported
+                logging.info(f"sendID {request_id} was relayed (implicit ACK)")
+            else:
+                logging.info(f"sendID {request_id} was ACKed by {packet.get('fromId') or packet.get('from')} "
+                             f"({describe_route(packet)})")
+        except Exception as e:
+            logging.info(f"sendID answer not understood: {e}")
     return on_response
 
 
@@ -148,7 +178,7 @@ def send_message(message, destination, interface, numbered=False, max_bytes=MAX_
                     destinationId=destination,
                     portNum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
                     wantAck=True,
-                    onResponse=_on_answer(answered),
+                    onResponse=_on_answer(answered, interface),
                     onResponseAckPermitted=True,
                 )
                 _answered, _handed_at = answered, time.monotonic()

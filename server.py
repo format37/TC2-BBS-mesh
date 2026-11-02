@@ -23,6 +23,7 @@ from db_operations import initialize_database
 from js8call_integration import JS8CallClient
 from message_processing import on_receive
 from pubsub import pub
+import radio_log
 from telegram_bridge import Bridge, Settings, TelegramApi
 from utils import load_env_file
 
@@ -102,6 +103,10 @@ def main():
     system_config = initialize_config(config_file)
 
     merge_config(system_config, args)
+
+    # Before connecting, so the radio's start-up lines are kept too
+    radio_log.start()
+    logging.info(f"The radio's own log goes to {os.path.abspath(radio_log.PATH)}")
 
     interface = get_interface(system_config)
     interface.bbs_nodes = system_config['bbs_nodes']

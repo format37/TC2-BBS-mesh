@@ -15,7 +15,7 @@ from command_handlers import (
 )
 from db_operations import add_bulletin, add_mail, delete_bulletin_by_unique_id, delete_mail, get_db_connection, add_channel, record_user_activity
 from js8call_integration import handle_js8call_command, handle_js8call_steps, handle_group_message_selection
-from utils import get_user_state, get_node_short_name, get_node_id_from_num, send_message
+from utils import describe_route, get_user_state, get_node_short_name, get_node_id_from_num, send_message
 
 
 # Load quick commands configuration
@@ -248,7 +248,8 @@ def on_receive(packet, interface):
             sender_short_name = get_node_short_name(sender_node_id, interface)
             receiver_short_name = get_node_short_name(get_node_id_from_num(to_id, interface),
                                                       interface) if to_id else "Group Chat"
-            logging.info(f"Received message from user '{sender_short_name}' ({sender_node_id}) to {receiver_short_name}: {message_string}")
+            logging.info(f"Received message from user '{sender_short_name}' ({sender_node_id}) to {receiver_short_name} "
+                         f"({describe_route(packet)}): {message_string}")
 
             bbs_nodes = interface.bbs_nodes
             is_sync_message = any(message_string.startswith(prefix) for prefix in
