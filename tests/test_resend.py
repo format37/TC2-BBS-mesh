@@ -113,6 +113,18 @@ def test_the_nodes_ack_after_the_implicit_ack_is_logged_once(radio, caplog):
     assert caplog.text.count(f'sendID 1 was ACKed by {NODE}') == 1
 
 
+def test_the_nodes_ack_as_the_first_answer_is_logged_once(radio, caplog):
+    radio.acks = False
+    with caplog.at_level(logging.INFO):
+        send_message('Test 41', NODE, radio)
+        # As meshtastic does it: the response handler first, then the packet to the subscribers
+        packet_id, on_response = radio.unanswered.pop(0)
+        ack = radio.routing(packet_id, NODE)
+        on_response(ack)
+        radio.publish(ack)
+    assert caplog.text.count(f'sendID 1 was ACKed by {NODE}') == 1
+
+
 def test_a_routing_answer_it_cannot_read_never_raises_on_the_publishing_thread(radio, caplog):
     with caplog.at_level(logging.INFO):
         utils.on_packet({'decoded': {'portnum': 'ROUTING_APP', 'requestId': 1, 'routing': 'garbage'}}, radio)

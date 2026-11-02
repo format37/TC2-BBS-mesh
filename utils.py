@@ -212,7 +212,7 @@ class _Sent:
             self._prune(now)
             earlier = self._answers.setdefault(packet_id, [])
             message = self._messages.get(packet_id)
-            late = (message is not None and sender == message[1] and earlier
+            late = (message is not None and sender == message[1] and len(earlier) > 0
                     and not any(s == sender for _, s, _ in earlier))
             earlier.append((now, sender, reason))
             return late
