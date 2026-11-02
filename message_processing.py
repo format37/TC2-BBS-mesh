@@ -15,7 +15,8 @@ from command_handlers import (
 )
 from db_operations import add_bulletin, add_mail, delete_bulletin_by_unique_id, delete_mail, get_db_connection, add_channel, record_user_activity
 from js8call_integration import handle_js8call_command, handle_js8call_steps, handle_group_message_selection
-from utils import describe_route, get_user_state, get_node_short_name, get_node_id_from_num, send_message
+from utils import (describe_route, get_user_state, get_node_short_name, get_node_id_from_num, heard_from,
+                   send_message)
 
 
 # Load quick commands configuration
@@ -264,6 +265,8 @@ def on_receive(packet, interface):
                 # Record user activity for "last users" feature (only for direct messages to BBS)
                 long_name = interface.nodes.get(sender_node_id, {}).get('user', {}).get('longName', '')
                 record_user_activity(sender_node_id, sender_short_name, long_name)
+                # Before the answer: the replies it hasn't ACKed are stale now, never this one
+                heard_from(sender_id)
                 process_message(sender_id, message_string, interface, is_sync_message=False)
             else:
                 logging.info("Ignoring message sent to group chat or from unknown node")

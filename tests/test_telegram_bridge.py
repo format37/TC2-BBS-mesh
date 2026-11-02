@@ -13,7 +13,7 @@ import requests
 
 import command_handlers
 import telegram_bridge
-from conftest import BBS_NUM, InlineWorker
+from conftest import BBS_NUM, InlineWorker, pass_resend_after
 from db_operations import (
     get_db_connection, get_telegram_contacts, get_telegram_links, get_telegram_user, set_telegram_current, utc_stamp
 )
@@ -377,15 +377,34 @@ def test_delivered_only_once_the_node_acked_every_part(bridge, iface):
     assert bridge.api.reactions(message_id) == [DELIVERED]
 
 
-def test_a_nak_means_not_delivered(bridge, iface, caplog):
+def test_a_nak_means_not_delivered_once_no_copy_is_left_to_send(bridge, iface, caplog, resends):
     link(bridge, iface)
     first = len(iface.sent)
     with caplog.at_level(logging.INFO):
         tg(bridge, 'Hello')
         iface.ack(first + 1, BBS_NUM, 'MAX_RETRANSMIT')
+        # The BBS sends it again, so that NAK isn't the end of it
+        assert bridge.api.reactions(bridge.api.last_incoming) == []
+        pass_resend_after(resends, first + 1)
+        assert iface.sent[first + 1] == (ALEX, 'wife: Hello')
+        iface.ack(first + 2, BBS_NUM, 'MAX_RETRANSMIT')
     assert bridge.api.reactions(bridge.api.last_incoming) == [NOT_DELIVERED]
     assert (f'message {bridge.api.last_incoming} from wife to !11111111 not delivered: no ACK from the node for '
             'part 1/1; NAK MAX_RETRANSMIT for part 1/1') in caplog.text
+
+
+def test_the_ack_of_a_part_sent_again_delivers_it(bridge, iface, resends):
+    link(bridge, iface)
+    first = len(iface.sent)
+    tg(bridge, 'word ' * 60)
+    message_id = bridge.api.last_incoming
+    iface.ack(first + 1, ALEX)
+    # Part 2 only got the implicit ACK: a relay passed it on, the node never got it
+    pass_resend_after(resends, first + 2)
+    assert iface.sent[first + 2][1].startswith('2/2 ')
+    assert bridge.api.reactions(message_id) == []
+    iface.ack(first + 3, ALEX)
+    assert bridge.api.reactions(message_id) == [DELIVERED]
 
 
 def test_no_ack_in_time_means_not_delivered_until_a_late_ack(bridge, iface, caplog):

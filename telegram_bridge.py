@@ -20,7 +20,9 @@ Threads:
 The sender on Telegram learns whether the radio user got a message from a
 reaction on it: DELIVERED once the node ACKed every part, NOT_DELIVERED on a
 NAK or when delivery_window passes first. A late ACK still turns it into
-DELIVERED.
+DELIVERED. utils.send_message sends a part the node hasn't ACKed once more
+(utils.RESEND_AFTER): the copy's ACK counts for the part, and a NAK the BBS
+answers by sending the part again doesn't fail it.
 
 The bot token is the whole bot: it comes from TELEGRAM_BOT_TOKEN and is never logged.
 """
@@ -44,7 +46,8 @@ from db_operations import (
     get_telegram_links, get_telegram_share_position, get_telegram_user, redeem_telegram_invite,
     set_telegram_current, set_telegram_language, touch_telegram_contact, utc_stamp
 )
-from utils import MAX_PAYLOAD_BYTES, change_user_state, send_message, split_message
+from utils import (AIR_FAILURES, MAX_PAYLOAD_BYTES, change_user_state, first_sent_as, resend_pending, send_message,
+                   split_message)
 
 # Reactions on the Telegram sender's message, both in Telegram's ReactionTypeEmoji
 # list as single code points (✅ and ❌ are not: 400 REACTION_INVALID)
@@ -307,7 +310,8 @@ class Settings:
     max_messages: int = 3       # radio messages one Telegram message may take
     max_per_hour: int = 60      # radio messages one contact may cause in a rolling hour
     invite_ttl_days: int = 7
-    delivery_window: int = 120  # seconds for the node's ACK of every part
+    # seconds for the node's ACK of every part; above utils.RESEND_AFTER plus the radio's ~30 s of retries
+    delivery_window: int = 120
 
     @classmethod
     def from_config(cls, config):
@@ -440,7 +444,8 @@ class Deliveries:
     is usually the implicit ACK: the BBS's radio heard a neighbour rebroadcast
     it. Only a routing packet from the node itself says the node got it. So
     every routing packet is kept here for RECENT_SECONDS by the id of the packet
-    it answers: the node's ACK can come before its message starts waiting.
+    it answers: the node's ACK can come before its message starts waiting. An
+    answer to a part the BBS sent again is kept under the part's first id.
     """
 
     def __init__(self, on_change, clock=time.monotonic, keep=RECENT_SECONDS):
@@ -448,23 +453,26 @@ class Deliveries:
         self._clock = clock
         self._keep = max(keep, RECENT_SECONDS)     # how long a delivery waits for late ACKs
         self._lock = threading.Lock()
-        self._answers = OrderedDict()   # packet id -> [(time, from, reason)]
+        self._answers = OrderedDict()   # packet id -> [(time, from, reason, final)]
         self._waiting = {}              # packet id -> Delivery
 
     def record(self, packet):
         """A routing packet came; on meshtastic's publishing thread."""
         decoded = packet.get('decoded') or {}
-        packet_id = decoded.get('requestId')
-        if packet_id is None:
+        request_id = decoded.get('requestId')
+        if request_id is None:
             return
+        packet_id = first_sent_as(request_id)
         sender = packet.get('from')
         reason = (decoded.get('routing') or {}).get('errorReason', 'NONE')
+        # The BBS may still send this copy again, so losing it on air is not the end
+        final = reason not in AIR_FAILURES or not resend_pending(request_id)
         now = self._clock()
         with self._lock:
             self._prune(now)
-            self._answers.setdefault(packet_id, []).append((now, sender, reason))
+            self._answers.setdefault(packet_id, []).append((now, sender, reason, final))
             delivery = self._waiting.get(packet_id)
-            changed = delivery is not None and self._apply(delivery, packet_id, sender, reason)
+            changed = delivery is not None and self._apply(delivery, packet_id, sender, reason, final)
         if changed:
             self._on_change(delivery)
 
@@ -477,8 +485,8 @@ class Deliveries:
             changed = False
             for packet_id in delivery.packet_ids:
                 self._waiting[packet_id] = delivery
-                for _, sender, reason in self._answers.get(packet_id, ()):
-                    changed = self._apply(delivery, packet_id, sender, reason) or changed
+                for _, sender, reason, final in self._answers.get(packet_id, ()):
+                    changed = self._apply(delivery, packet_id, sender, reason, final) or changed
             if delivery.state == 'waiting' and len(delivery.packet_ids) < delivery.parts:
                 delivery.state = 'failed'
                 changed = True
@@ -493,13 +501,13 @@ class Deliveries:
             delivery.state = 'failed'
         self._on_change(delivery)
 
-    def _apply(self, delivery, packet_id, sender, reason):
+    def _apply(self, delivery, packet_id, sender, reason, final=True):
         """Count one answer; True if the delivery turned delivered or failed."""
         if delivery.state == 'delivered':
             return False
         if reason != 'NONE':
             delivery.naks[packet_id] = reason
-            if delivery.state == 'waiting':
+            if final and delivery.state == 'waiting':
                 delivery.state = 'failed'
                 return True
             return False
@@ -847,7 +855,7 @@ class Bridge:
                 logging.info(f"Telegram: {delivery.label} not sent: the contact was removed meanwhile")
                 return
             for part in parts:
-                packet_ids = send_message(part, destination, self.interface)
+                packet_ids = send_message(part, destination, self.interface, reply=False)
                 if not packet_ids:
                     break
                 delivery.packet_ids += packet_ids
@@ -1084,6 +1092,6 @@ class Bridge:
 
     def _send_radio(self, node_id, message_text):
         try:
-            send_message(message_text, node_num(node_id), self.interface)
+            send_message(message_text, node_num(node_id), self.interface, reply=False)
         except Exception:
             logging.exception(f"Telegram: notice to {node_id} failed")

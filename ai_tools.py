@@ -445,7 +445,7 @@ class AgentTools:
             add_mail(self.node_id, sender_short_name, recipient_id, subject, body,
                      self.interface.bbs_nodes, self.interface)
             notification_message = f"You have a new mail message from {sender_short_name}. Check your mailbox by responding to this message with CM."
-            send_message(notification_message, recipient_id, self.interface)
+            send_message(notification_message, recipient_id, self.interface, reply=False)
             return text_for('sent', self.language, to=recipient_name)
 
         return self._propose(
