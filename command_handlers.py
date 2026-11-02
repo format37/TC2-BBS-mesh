@@ -400,7 +400,7 @@ def handle_mail_steps(sender_id, message, step, state, interface, bbs_nodes):
             send_message(f"Mail has been posted to the mailbox of {recipient_name}.\n(╯°□°)╯📨📬", sender_id, interface)
 
             notification_message = f"You have a new mail message from {sender_short_name}. Check your mailbox by responding to this message with CM."
-            send_message(notification_message, recipient_id, interface)
+            send_message(notification_message, recipient_id, interface, reply=False)
 
             update_user_state(sender_id, None)
             update_user_state(sender_id, {'command': 'MAIL', 'step': 8})
@@ -537,7 +537,7 @@ def handle_send_mail_command(sender_id, message, interface, bbs_nodes):
         send_message(f"Mail has been sent to {recipient_name}.", sender_id, interface)
 
         notification_message = f"You have a new mail message from {sender_short_name}. Check your mailbox by responding to this message with CM."
-        send_message(notification_message, recipient_id, interface)
+        send_message(notification_message, recipient_id, interface, reply=False)
 
     except Exception as e:
         logging.error(f"Error processing send mail command: {e}")

@@ -148,9 +148,30 @@ def bbs_dir(tmp_path, monkeypatch):
     _close_db()
 
 
+@pytest.fixture(autouse=True)
+def resends(monkeypatch):
+    """
+    The resend checks utils.send_message scheduled, as (delay, function, args),
+    kept instead of run: call one to pass RESEND_AFTER. Nothing sent is remembered across tests.
+    """
+    import utils
+    checks = []
+    monkeypatch.setattr(utils, '_sent', utils._Sent())
+    monkeypatch.setattr(utils, '_schedule', lambda delay, function, *args: checks.append((delay, function, args)))
+    return checks
+
+
+def pass_resend_after(resends, packet_id):
+    """RESEND_AFTER passes for packet_id: its resend check runs."""
+    [(_, check, args)] = [(delay, check, args) for delay, check, args in resends if args[3] == packet_id]
+    check(*args)
+
+
 @pytest.fixture
 def iface():
+    import utils
     interface = FakeInterface()
+    interface.listeners.append(utils.on_packet)
     yield interface
     assert not interface.oversize, f'payloads over 200 bytes: {interface.oversize}'
 

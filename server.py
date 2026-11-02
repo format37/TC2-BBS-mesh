@@ -25,6 +25,7 @@ from message_processing import on_receive
 from pubsub import pub
 import radio_log
 from telegram_bridge import Bridge, Settings, TelegramApi
+import utils
 from utils import load_env_file
 
 # General logging
@@ -107,6 +108,8 @@ def main():
     # Before connecting, so the radio's start-up lines are kept too
     radio_log.start()
     logging.info(f"The radio's own log goes to {os.path.abspath(radio_log.PATH)}")
+    # The routing answers to what the BBS sends: a message its destination doesn't ACK is sent again
+    pub.subscribe(utils.on_packet, 'meshtastic.receive')
 
     interface = get_interface(system_config)
     interface.bbs_nodes = system_config['bbs_nodes']
